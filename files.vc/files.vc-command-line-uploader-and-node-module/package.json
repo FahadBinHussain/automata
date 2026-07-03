@@ -1,0 +1,29 @@
+{
+  "name": "filesvc-uploader",
+  "version": "1.0.0",
+  "description": "A simple Node.js uploader for files.vc",
+  "main": "lib/uploader.js",
+  "types": "lib/uploader.d.ts",
+  "bin": {
+    "filesvc-uploader": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "form-data": "^4.0.0",
+    "commander": "^11.0.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "keywords": [
+    "files.vc",
+    "uploader",
+    "file-sharing"
+  ],
+  "license": "MIT"
+} 

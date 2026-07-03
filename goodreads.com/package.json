@@ -1,0 +1,38 @@
+{
+  "name": "goodreads-scraper",
+  "version": "1.0.0",
+  "description": "A library for scraping book details from Goodreads",
+  "main": "index.js",
+  "bin": {
+    "goodreads-scraper": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node test/test.js",
+    "start": "node examples/simple-scrape.js",
+    "example:multiple": "node examples/multiple-books.js",
+    "example:html": "node examples/html-output.js"
+  },
+  "keywords": [
+    "goodreads",
+    "scraper",
+    "books",
+    "library",
+    "web-scraping"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/goodreads-scraper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/goodreads-scraper/issues"
+  }
+} 
