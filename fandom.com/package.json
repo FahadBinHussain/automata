@@ -1,0 +1,25 @@
+{
+  "name": "fandom-scraper",
+  "version": "1.0.0",
+  "description": "A Node.js scraper for Fandom sites",
+  "main": "scraper.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node scraper.js",
+    "scrape": "node scraper.js"
+  },
+  "keywords": [
+    "fandom",
+    "scraper",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.9.0",
+    "cheerio": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

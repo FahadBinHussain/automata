@@ -1,0 +1,20 @@
+{
+  "position": [
+    0,
+    -2,
+    10
+  ],
+  "rotation": [
+    3.141592653589793,
+    0,
+    0
+  ],
+  "offset": [
+    0,
+    0,
+    -2
+  ],
+  "cameraRadius": 8,
+  "radius": 400,
+  "duration": null
+}
