@@ -1,19 +1,43 @@
 #!/usr/bin/env node
 /**
  * theoldllm-proxy.mjs — local OpenAI-compatible HTTP proxy for TheOldLLM
- * Runs on port 3001 (or env PORT). Translates OpenAI /v1/chat/completions
- * into headless-browser CLI calls.
+ * Keeps one headless Chromium browser warm and reuses it across requests.
  */
 
 import http from "http";
-import { spawn } from "child_process";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { chromium } from "playwright";
+import { readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { randomUUID } from "crypto";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CLI_PATH = join(__dirname, "theoldllm-cli.mjs");
+const TOKEN_PATH = join(homedir(), ".config", "theoldllm", "token.txt");
 const PORT = process.env.PORT || 3001;
+const ORIGIN = "https://<app-url>";
+const API_URL = "https://<app-url>/api/aichat";
+
+let token;
+try {
+  token = readFileSync(TOKEN_PATH, "utf-8").trim();
+} catch {
+  console.error(`Token not found at ${TOKEN_PATH}`);
+  process.exit(1);
+}
+
+// Warm browser — launched once, reused forever
+let browser;
+let context;
+
+async function initBrowser() {
+  if (browser) return;
+  console.log("[warmup] launching chromium...");
+  browser = await chromium.launch({ headless: true });
+  context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.0 Edg/150.0.0.0",
+  });
+  console.log("[warmup] browser ready");
+}
 
 function send(res, statusCode, data) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
@@ -28,31 +52,22 @@ const server = http.createServer(async (req, res) => {
   const start = Date.now();
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
 
-  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  // GET /v1/models and /models — model list
   if (req.method === "GET" && (req.url === "/v1/models" || req.url === "/models")) {
     console.log(`  -> 200 (${Date.now() - start}ms)`);
     send(res, 200, {
       object: "list",
-      data: [
-        {
-          id: "gpt-5.5",
-          object: "model",
-          created: 1700000000,
-          owned_by: "theoldllm",
-        },
-      ],
+      data: [{ id: "gpt-5.5", object: "model", created: 1700000000, owned_by: "theoldllm" }],
     });
     return;
   }
 
   if (req.method !== "POST" || (req.url !== "/v1/chat/completions" && req.url !== "/chat/completions")) {
-    console.log(`  -> 404 (${Date.now() - start}ms) — not handled`);
+    console.log(`  -> 404 (${Date.now() - start}ms)`);
     send(res, 404, { error: { message: "Not found", type: "not_found", code: "not_found" } });
     return;
   }
@@ -74,80 +89,120 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const args = [CLI_PATH];
-      if (model) args.push("-m", model);
-      // WARNING: never pass long content via CLI args on Windows — ENAMETOOLONG
-      // Pass message via stdin instead
-      const proc = spawn(process.execPath, args, {
-        cwd: __dirname,
-        env: { ...process.env },
-      });
-      proc.stdin.write(userMsg.content);
-      proc.stdin.end();
+      await initBrowser();
 
-      let stdout = "";
-      let stderr = "";
-      proc.stdout.on("data", (data) => { stdout += data; });
-      proc.stderr.on("data", (data) => { stderr += data; });
+      const page = await context.newPage();
+      try {
+        // Must navigate to origin before fetch works with proper origin/referrer
+        await page.goto(ORIGIN, { waitUntil: "networkidle", timeout: 30000 });
 
-      await new Promise((resolve, reject) => {
-        proc.on("close", (code) => {
-          if (code !== 0) {
-            reject(new Error(`CLI exited ${code}: ${stderr || stdout}`));
-          } else {
-            resolve();
-          }
-        });
-        proc.on("error", reject);
-      });
+        const threadId = randomUUID();
+        const msgs = [];
+        if (systemMsg?.content) msgs.push({ role: "system", content: systemMsg.content });
+        msgs.push({ role: "user", content: userMsg.content });
 
-      const id = `chatcmpl-${randomUUID()}`;
-      const created = Math.floor(Date.now() / 1000);
-
-      if (stream) {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-        });
-
-        // Send one delta with the full text
-        sendSSE(res, {
-          id,
-          object: "chat.completion.chunk",
-          created,
+        const fetchBody = {
           model,
-          choices: [{ index: 0, delta: { content: stdout.trim() }, finish_reason: null }],
-        });
+          provider: "openai",
+          messages: msgs,
+          stream,
+          threadId,
+          sessionId: threadId,
+        };
 
-        // Send finish
-        sendSSE(res, {
-          id,
-          object: "chat.completion.chunk",
-          created,
-          model,
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        });
-
-        res.write("data: [DONE]\n\n");
-        res.end();
-        console.log(`  -> 200 SSE (${Date.now() - start}ms)`);
-      } else {
-        console.log(`  -> 200 JSON (${Date.now() - start}ms)`);
-        send(res, 200, {
-          id,
-          object: "chat.completion",
-          created,
-          model,
-          choices: [
-            {
-              index: 0,
-              message: { role: "assistant", content: stdout.trim() },
-              finish_reason: "stop",
+        const result = await page.evaluate(async ({ apiUrl, token, body }) => {
+          const res = await fetch(apiUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Supabase-Auth": token,
+              "Referer": "https://<app-url>/",
             },
-          ],
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-        });
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) return { error: true, status: res.status, text: await res.text() };
+          return { error: false, text: await res.text() };
+        }, { apiUrl: API_URL, token, body: fetchBody });
+
+        if (result.error) {
+          await page.close();
+          console.log(`  -> ${result.status} (${Date.now() - start}ms) — upstream error`);
+          send(res, result.status, { error: { message: result.text, type: "api_error" } });
+          return;
+        }
+
+        const id = `chatcmpl-${randomUUID()}`;
+        const created = Math.floor(Date.now() / 1000);
+
+        if (stream) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+          });
+
+          // SSE: data: {...}
+          const lines = result.text.split("\n");
+          let content = "";
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const data = line.slice(6);
+              if (data === "[DONE]") break;
+              try {
+                const parsed = JSON.parse(data);
+                const chunk = parsed.choices?.[0]?.delta?.content ?? "";
+                content += chunk;
+              } catch { /* ignore */ }
+            }
+          }
+
+          sendSSE(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content }, finish_reason: null }] });
+          sendSSE(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+          res.write("data: [DONE]\n\n");
+          res.end();
+          console.log(`  -> 200 SSE (${Date.now() - start}ms)`);
+        } else {
+          // Try multiple extraction strategies — TheOldLLM wraps responses in various ways
+          let text = "";
+          const raw = result.text.trim();
+
+          // Strategy 1: plain OpenAI JSON with choices[].message.content
+          try {
+            const outer = JSON.parse(raw);
+            const inner = outer.choices?.[0]?.message?.content;
+            if (inner) {
+              // inner may be a JSON-stringified blob of streaming lines
+              const lines = inner.split("\n").filter(Boolean);
+              for (const line of lines) {
+                try {
+                  const parsed = JSON.parse(line);
+                  if (parsed.type === "delta" && typeof parsed.content === "string") text += parsed.content;
+                } catch { /* not a JSON line */ }
+              }
+              if (!text) text = inner; // fallback to raw inner content
+            }
+          } catch {
+            // Strategy 2: line-delimited JSON (delta format)
+            const lines = raw.split("\n").filter(Boolean);
+            for (const line of lines) {
+              try {
+                const parsed = JSON.parse(line);
+                if (parsed.type === "delta" && typeof parsed.content === "string") text += parsed.content;
+              } catch { /* ignore */ }
+            }
+          }
+
+          if (!text) text = raw; // ultimate fallback
+
+          console.log(`  -> 200 JSON (${Date.now() - start}ms)`);
+          send(res, 200, {
+            id, object: "chat.completion", created, model,
+            choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          });
+        }
+      } finally {
+        await page.close();
       }
     } catch (err) {
       console.error("proxy error:", err);
@@ -160,6 +215,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`theoldllm proxy listening on http://localhost:${PORT}`);
   console.log(`openai endpoint: POST http://localhost:${PORT}/v1/chat/completions`);
+  // Pre-warm browser so first request is fast
+  initBrowser().catch((err) => console.error("warmup failed:", err));
 });
 
 server.on("error", (err) => {
