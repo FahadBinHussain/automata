@@ -25,14 +25,18 @@ function sendSSE(res, chunk) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const start = Date.now();
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  // GET /v1/models — model list (opencode queries this to discover models)
-  if (req.method === "GET" && req.url === "/v1/models") {
+  // GET /v1/models and /models — model list
+  if (req.method === "GET" && (req.url === "/v1/models" || req.url === "/models")) {
+    console.log(`  -> 200 (${Date.now() - start}ms)`);
     send(res, 200, {
       object: "list",
       data: [
@@ -47,7 +51,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+  if (req.method !== "POST" || (req.url !== "/v1/chat/completions" && req.url !== "/chat/completions")) {
+    console.log(`  -> 404 (${Date.now() - start}ms) — not handled`);
     send(res, 404, { error: { message: "Not found", type: "not_found", code: "not_found" } });
     return;
   }
@@ -64,6 +69,7 @@ const server = http.createServer(async (req, res) => {
       const userMsg = messages.find((m) => m.role === "user");
 
       if (!userMsg) {
+        console.log(`  -> 400 (${Date.now() - start}ms) — no user message`);
         send(res, 400, { error: { message: "No user message found", type: "invalid_request_error", code: "no_user_message" } });
         return;
       }
@@ -125,7 +131,9 @@ const server = http.createServer(async (req, res) => {
 
         res.write("data: [DONE]\n\n");
         res.end();
+        console.log(`  -> 200 SSE (${Date.now() - start}ms)`);
       } else {
+        console.log(`  -> 200 JSON (${Date.now() - start}ms)`);
         send(res, 200, {
           id,
           object: "chat.completion",
@@ -143,6 +151,7 @@ const server = http.createServer(async (req, res) => {
       }
     } catch (err) {
       console.error("proxy error:", err);
+      console.log(`  -> 500 (${Date.now() - start}ms)`);
       send(res, 500, { error: { message: err.message, type: "api_error", code: "internal_error" } });
     }
   });
