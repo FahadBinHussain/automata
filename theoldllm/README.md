@@ -29,6 +29,8 @@ The token is the `X-Supabase-Auth` value from a logged-in browser session on the
 
 ## usage
 
+### CLI mode
+
 ```bash
 # basic chat (streaming)
 node theoldllm-cli.mjs "hello world"
@@ -46,6 +48,72 @@ echo "summarize this" | node theoldllm-cli.mjs
 node theoldllm-cli.mjs --show-browser "test"
 ```
 
+### OpenAI-compatible proxy mode
+
+Start the proxy server:
+
+```bash
+node theoldllm-proxy.mjs
+```
+
+This runs an OpenAI-compatible HTTP API on `http://localhost:3001`:
+
+```bash
+# test with curl
+curl -X POST http://localhost:3001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### opencode integration
+
+Add to `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "theoldllm": {
+      "api": "openai",
+      "options": {
+        "baseURL": "http://localhost:3001",
+        "apiKey": "dummy"
+      },
+      "models": {
+        "gpt-5.5": {
+          "id": "gpt-5.5",
+          "name": "TheOldLLM GPT-5.5",
+          "provider": { "api": "openai" },
+          "options": {}
+        }
+      }
+    }
+  }
+}
+```
+
+Then in opencode:
+
+1. Start the proxy: `node theoldllm-proxy.mjs` (keep it running)
+2. **Restart opencode** (config is not hot-reloaded)
+3. Switch model: `/model theoldllm/gpt-5.5`
+
+### MCP tool (alternative)
+
+An MCP server is also included for tool-based access:
+
+```jsonc
+{
+  "mcp": {
+    "theoldllm": {
+      "type": "local",
+      "command": ["node", "C:/Users/<user>/Downloads/automata/theoldllm/theoldllm-cli/theoldllm-mcp.mjs"],
+      "enabled": true
+    }
+  }
+}
+```
+
 ## options
 
 | flag | description |
@@ -61,3 +129,4 @@ node theoldllm-cli.mjs --show-browser "test"
 
 - each call spins up a headless chromium (~2-3s overhead) because Vercel WAF blocks non-browser requests.
 - no custom tool calling — the API only supports its internal `webSearch` tool.
+- the proxy must stay running for opencode to use it as a provider.
