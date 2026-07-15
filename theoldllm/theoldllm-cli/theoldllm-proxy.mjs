@@ -76,14 +76,14 @@ const server = http.createServer(async (req, res) => {
 
       const args = [CLI_PATH];
       if (model) args.push("-m", model);
-      if (systemMsg?.content) args.push("-s", systemMsg.content);
-      if (!stream) args.push("--no-stream");
-      args.push(userMsg.content);
-
+      // WARNING: never pass long content via CLI args on Windows — ENAMETOOLONG
+      // Pass message via stdin instead
       const proc = spawn(process.execPath, args, {
         cwd: __dirname,
         env: { ...process.env },
       });
+      proc.stdin.write(userMsg.content);
+      proc.stdin.end();
 
       let stdout = "";
       let stderr = "";
