@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * theoldllm-proxy.mjs — local OpenAI-compatible HTTP proxy for TheOldLLM
- * Keeps one headless Chromium browser warm and reuses it across requests.
+ * Keeps one headless Chromium page permanently warm and reuses it.
+ * Sends full conversation history so TheOldLLM sees context.
  */
 
 import http from "http";
@@ -24,9 +25,11 @@ try {
   process.exit(1);
 }
 
-// Warm browser — launched once, reused forever
+// Warm browser + permanently warmed page
 let browser;
 let context;
+let warmPage;
+let lastThreadId;
 
 async function initBrowser() {
   if (browser) return;
@@ -36,7 +39,9 @@ async function initBrowser() {
     viewport: { width: 1280, height: 720 },
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.0 Edg/150.0.0.0",
   });
-  console.log("[warmup] browser ready");
+  warmPage = await context.newPage();
+  await warmPage.goto(ORIGIN, { waitUntil: "networkidle", timeout: 30000 });
+  console.log("[warmup] browser + page ready");
 }
 
 function send(res, statusCode, data) {
@@ -46,6 +51,39 @@ function send(res, statusCode, data) {
 
 function sendSSE(res, chunk) {
   res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+}
+
+function extractText(raw) {
+  // Try multiple extraction strategies — TheOldLLM wraps responses in various ways
+  let text = "";
+  const trimmed = raw.trim();
+
+  // Strategy 1: outer OpenAI JSON wrapping inner content
+  try {
+    const outer = JSON.parse(trimmed);
+    const inner = outer.choices?.[0]?.message?.content;
+    if (inner) {
+      const lines = inner.split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.type === "delta" && typeof parsed.content === "string") text += parsed.content;
+        } catch { /* not JSON */ }
+      }
+      if (!text) text = inner;
+    }
+  } catch {
+    // Strategy 2: line-delimited delta JSON
+    const lines = trimmed.split("\n").filter(Boolean);
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type === "delta" && typeof parsed.content === "string") text += parsed.content;
+      } catch { /* ignore */ }
+    }
+  }
+
+  return text || trimmed;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -80,129 +118,83 @@ const server = http.createServer(async (req, res) => {
       const messages = payload.messages || [];
       const model = payload.model || "gpt-5.5";
       const stream = payload.stream === true;
-      const systemMsg = messages.find((m) => m.role === "system");
-      const userMsg = messages.find((m) => m.role === "user");
 
-      if (!userMsg) {
-        console.log(`  -> 400 (${Date.now() - start}ms) — no user message`);
-        send(res, 400, { error: { message: "No user message found", type: "invalid_request_error", code: "no_user_message" } });
+      if (!messages.length) {
+        console.log(`  -> 400 (${Date.now() - start}ms) — no messages`);
+        send(res, 400, { error: { message: "No messages provided", type: "invalid_request_error", code: "no_messages" } });
         return;
       }
 
+      // Reuse same threadId for continuity — TheOldLLM sees conversation history
+      if (!lastThreadId) lastThreadId = randomUUID();
+
       await initBrowser();
 
-      const page = await context.newPage();
-      try {
-        // Must navigate to origin before fetch works with proper origin/referrer
-        await page.goto(ORIGIN, { waitUntil: "networkidle", timeout: 30000 });
+      // Reuse the warm page — NO new page.goto, that's what was eating 15s
+      const result = await warmPage.evaluate(async ({ apiUrl, token, body }) => {
+        const res = await fetch(apiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Supabase-Auth": token,
+            "Referer": "https://<app-url>/",
+          },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) return { error: true, status: res.status, text: await res.text() };
+        return { error: false, text: await res.text() };
+      }, { apiUrl: API_URL, token, body: {
+        model,
+        provider: "openai",
+        messages,
+        stream,
+        threadId: lastThreadId,
+        sessionId: lastThreadId,
+      }});
 
-        const threadId = randomUUID();
-        const msgs = [];
-        if (systemMsg?.content) msgs.push({ role: "system", content: systemMsg.content });
-        msgs.push({ role: "user", content: userMsg.content });
+      if (result.error) {
+        console.log(`  -> ${result.status} (${Date.now() - start}ms) — upstream error`);
+        send(res, result.status, { error: { message: result.text, type: "api_error" } });
+        return;
+      }
 
-        const fetchBody = {
-          model,
-          provider: "openai",
-          messages: msgs,
-          stream,
-          threadId,
-          sessionId: threadId,
-        };
+      const id = `chatcmpl-${randomUUID()}`;
+      const created = Math.floor(Date.now() / 1000);
 
-        const result = await page.evaluate(async ({ apiUrl, token, body }) => {
-          const res = await fetch(apiUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Supabase-Auth": token,
-              "Referer": "https://<app-url>/",
-            },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) return { error: true, status: res.status, text: await res.text() };
-          return { error: false, text: await res.text() };
-        }, { apiUrl: API_URL, token, body: fetchBody });
+      if (stream) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+        });
 
-        if (result.error) {
-          await page.close();
-          console.log(`  -> ${result.status} (${Date.now() - start}ms) — upstream error`);
-          send(res, result.status, { error: { message: result.text, type: "api_error" } });
-          return;
+        const lines = result.text.split("\n");
+        let content = "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(data);
+              const chunk = parsed.choices?.[0]?.delta?.content ?? "";
+              content += chunk;
+            } catch { /* ignore */ }
+          }
         }
 
-        const id = `chatcmpl-${randomUUID()}`;
-        const created = Math.floor(Date.now() / 1000);
-
-        if (stream) {
-          res.writeHead(200, {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-          });
-
-          // SSE: data: {...}
-          const lines = result.text.split("\n");
-          let content = "";
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const data = line.slice(6);
-              if (data === "[DONE]") break;
-              try {
-                const parsed = JSON.parse(data);
-                const chunk = parsed.choices?.[0]?.delta?.content ?? "";
-                content += chunk;
-              } catch { /* ignore */ }
-            }
-          }
-
-          sendSSE(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content }, finish_reason: null }] });
-          sendSSE(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
-          res.write("data: [DONE]\n\n");
-          res.end();
-          console.log(`  -> 200 SSE (${Date.now() - start}ms)`);
-        } else {
-          // Try multiple extraction strategies — TheOldLLM wraps responses in various ways
-          let text = "";
-          const raw = result.text.trim();
-
-          // Strategy 1: plain OpenAI JSON with choices[].message.content
-          try {
-            const outer = JSON.parse(raw);
-            const inner = outer.choices?.[0]?.message?.content;
-            if (inner) {
-              // inner may be a JSON-stringified blob of streaming lines
-              const lines = inner.split("\n").filter(Boolean);
-              for (const line of lines) {
-                try {
-                  const parsed = JSON.parse(line);
-                  if (parsed.type === "delta" && typeof parsed.content === "string") text += parsed.content;
-                } catch { /* not a JSON line */ }
-              }
-              if (!text) text = inner; // fallback to raw inner content
-            }
-          } catch {
-            // Strategy 2: line-delimited JSON (delta format)
-            const lines = raw.split("\n").filter(Boolean);
-            for (const line of lines) {
-              try {
-                const parsed = JSON.parse(line);
-                if (parsed.type === "delta" && typeof parsed.content === "string") text += parsed.content;
-              } catch { /* ignore */ }
-            }
-          }
-
-          if (!text) text = raw; // ultimate fallback
-
-          console.log(`  -> 200 JSON (${Date.now() - start}ms)`);
-          send(res, 200, {
-            id, object: "chat.completion", created, model,
-            choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-          });
-        }
-      } finally {
-        await page.close();
+        sendSSE(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content }, finish_reason: null }] });
+        sendSSE(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        console.log(`  -> 200 SSE (${Date.now() - start}ms)`);
+      } else {
+        const text = extractText(result.text);
+        console.log(`  -> 200 JSON (${Date.now() - start}ms)`);
+        send(res, 200, {
+          id, object: "chat.completion", created, model,
+          choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
       }
     } catch (err) {
       console.error("proxy error:", err);
@@ -215,7 +207,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`theoldllm proxy listening on http://localhost:${PORT}`);
   console.log(`openai endpoint: POST http://localhost:${PORT}/v1/chat/completions`);
-  // Pre-warm browser so first request is fast
   initBrowser().catch((err) => console.error("warmup failed:", err));
 });
 
