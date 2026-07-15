@@ -52,6 +52,12 @@ node theoldllm-cli.mjs --show-browser "test"
 
 Start the proxy server:
 
+**Option A: Double-click the desktop shortcut**
+
+A shortcut named **"TheOldLLM Proxy"** is on your desktop. Double-click it to start the proxy in a minimized PowerShell window. It will run on `http://localhost:3001`.
+
+**Option B: Run manually from terminal**
+
 ```bash
 node theoldllm-proxy.mjs
 ```
