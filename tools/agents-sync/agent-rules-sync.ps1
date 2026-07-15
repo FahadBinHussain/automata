@@ -1,5 +1,5 @@
 # agent-rules-sync.ps1
-# Watches ~/.codex/AGENTS.md and syncs it to:
+# Watches ~/AGENTS.md and syncs it to:
 #   1. ~/.cursor/rules/user-preferences.mdc        (Cursor Home workspace, Glass mode)
 #   2. Cursor state.vscdb aicontext.personalContext (Cursor Settings > Rules, editor global)
 #   3. ~/.kiro/steering/AGENTS.md                  (Kiro global steering doc, COPY not symlink)
