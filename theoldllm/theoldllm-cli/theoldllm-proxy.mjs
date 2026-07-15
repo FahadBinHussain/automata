@@ -31,6 +31,22 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
+  // GET /v1/models — model list (opencode queries this to discover models)
+  if (req.method === "GET" && req.url === "/v1/models") {
+    send(res, 200, {
+      object: "list",
+      data: [
+        {
+          id: "gpt-5.5",
+          object: "model",
+          created: 1700000000,
+          owned_by: "theoldllm",
+        },
+      ],
+    });
+    return;
+  }
+
   if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
     send(res, 404, { error: { message: "Not found", type: "not_found", code: "not_found" } });
     return;
