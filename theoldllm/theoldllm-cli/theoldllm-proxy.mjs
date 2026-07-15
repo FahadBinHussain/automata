@@ -136,3 +136,14 @@ server.listen(PORT, () => {
   console.log(`theoldllm proxy listening on http://localhost:${PORT}`);
   console.log(`openai endpoint: POST http://localhost:${PORT}/v1/chat/completions`);
 });
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`port ${PORT} is already in use. theoldllm proxy may already be running.`);
+    console.error(`try: curl http://localhost:${PORT}/v1/chat/completions`);
+    process.exit(1);
+  } else {
+    console.error("server error:", err);
+    process.exit(1);
+  }
+});
