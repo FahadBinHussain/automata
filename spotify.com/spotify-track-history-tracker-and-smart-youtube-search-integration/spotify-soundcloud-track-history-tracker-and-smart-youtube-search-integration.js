@@ -80,7 +80,6 @@
 
     function setCloudOnline() {
         isCloudDisabled = false;
-        lastCloudError = "";
         clearBanner();
     }
 
@@ -340,23 +339,25 @@
                         scheduleFetchRetry();
                         return;
                     }
+                    let ids;
                     try {
-                        const ids = JSON.parse(response.responseText);
-                        if (!Array.isArray(ids)) {
-                            setCloudDisabled("-cloud returned non-array JSON: " +
-                                             response.responseText.slice(0, 100));
-                            scheduleFetchRetry();
-                            return;
-                        }
-                        visitedTracks = new Set(ids.filter(Boolean).map(String));
-                        isHistoryLoaded = true;
-                        setCloudOnline();
-                        addYoutubeButtons();
+                        ids = JSON.parse(response.responseText);
                     } catch (parseErr) {
                         setCloudDisabled("bad JSON: " + parseErr.message +
                                          " (first 80: " + response.responseText.slice(0, 80) + ")");
                         scheduleFetchRetry();
+                        return;
                     }
+                    if (!Array.isArray(ids)) {
+                        setCloudDisabled("cloud returned non-array JSON: " +
+                                         response.responseText.slice(0, 100));
+                        scheduleFetchRetry();
+                        return;
+                    }
+                    visitedTracks = new Set(ids.filter(Boolean).map(String));
+                    isHistoryLoaded = true;
+                    setCloudOnline();
+                    addYoutubeButtons();
                 } else {
                     setCloudDisabled("HTTP " + response.status + " from cloud");
                     scheduleFetchRetry();
