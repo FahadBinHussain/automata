@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Spotify/SoundCloud to YouTube (Cloud Sync + Clear + Multi-Artist + Fixes)
 // @namespace    http://tampermonkey.net/
-// @version      3.4
+// @version      3.5
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/spotify.com/spotify-track-history-tracker-and-smart-youtube-search-integration/spotify-soundcloud-track-history-tracker-and-smart-youtube-search-integration.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/spotify.com/spotify-track-history-tracker-and-smart-youtube-search-integration/spotify-soundcloud-track-history-tracker-and-smart-youtube-search-integration.js
 // @description  Adds YouTube buttons on Spotify and SoundCloud, syncs history, forces anonymous requests to fix Google login bugs.
@@ -44,18 +44,20 @@
     }
 
     function showBanner(message, kind) {
-       	const existing = document.getElementById('vm-cloud-banner');
+        const existing = document.getElementById('vm-cloud-banner');
         if (existing) existing.remove();
-       	const banner = document.createElement('div');
+        const banner = document.createElement('div');
         banner.id = 'vm-cloud-banner';
-       	const bg = kind === 'warn' ? '#f59e0b' : '#dc2626';
+        const bg = kind === 'warn' ? '#f59e0b' : '#dc2626';
         banner.style.cssText = [
             'position:fixed', 'top:0', 'left:0', 'right:0',
-            'z-index:2147483647', 'padding:8px 12px',
+            'z-index:2147483647', 'padding:10px 14px',
             'background:' + bg, 'color:#fff',
-            'font:bold 13px/1.4 system-ui,Segoe UI,Roboto,sans-serif',
-            'text-align:center', 'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
-            'pointer-events:none'
+            'font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
+            'white-space:pre-wrap', 'word-break:break-word',
+            'text-align:left', 'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
+            'pointer-events:auto', 'user-select:text',
+            'max-height:40vh', 'overflow:auto'
         ].join(';');
         banner.textContent = message;
         document.documentElement.appendChild(banner);
@@ -68,8 +70,11 @@
 
     function setCloudDisabled(reason) {
         isCloudDisabled = true;
-        showBanner("Spotify→YouTube cloud sync OFFLINE: " + (reason || "unknown error") +
-                   " — clicks won't mark tracks visited. Fix CLOUD_URL or your network.",
+        const msg = reason || "unknown error";
+        console.error("[Spotify→YT] cloud sync OFFLINE:", msg);
+        showBanner("Spotify→YouTube cloud sync OFFLINE: " + msg +
+                   " — clicks won't mark tracks visited. Fix CLOUD_URL or your network. " +
+                   "(see browser console for details)",
                    "error");
     }
 
