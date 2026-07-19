@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Spotify/SoundCloud to YouTube (Cloud Sync + Clear + Multi-Artist + Fixes)
 // @namespace    http://tampermonkey.net/
-// @version      3.3
+// @version      3.4
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/spotify.com/spotify-track-history-tracker-and-smart-youtube-search-integration/spotify-soundcloud-track-history-tracker-and-smart-youtube-search-integration.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/spotify.com/spotify-track-history-tracker-and-smart-youtube-search-integration/spotify-soundcloud-track-history-tracker-and-smart-youtube-search-integration.js
 // @description  Adds YouTube buttons on Spotify and SoundCloud, syncs history, forces anonymous requests to fix Google login bugs.
@@ -17,13 +17,67 @@
 (function() {
     'use strict';
 
-    // YOUR URL
+    // YOUR URL — replace with your Apps Script Web App URL
+    // (https://script.google.com/macros/s/.../exec)
     const CLOUD_URL = "YOUR_URL_HERE";
 
     const YT_BUTTON_CLASS = 'vm-yt-search-btn';
+    const PLACEHOLDER_URL = "YOUR_URL_HERE";
+
     let visitedTracks = new Set();
+    // isHistoryLoaded becomes true only after a successful cloud GET.
+    // Until then, the script refuses to mark icons as "visited" on click,
+    // because cloud is the source of truth and we don't silently fall back
+    // to local-only state.
     let isHistoryLoaded = false;
+    // isCloudDisabled is true when CLOUD_URL is the placeholder OR when a
+    // cloud request has failed. The banner is shown so the user knows.
+    let isCloudDisabled = false;
     let debounceTimer = null;
+    let fetchRetryTimer = null;
+
+    function isCloudUrlConfigured() {
+        return typeof CLOUD_URL === "string" &&
+               CLOUD_URL.trim().length > 0 &&
+               CLOUD_URL.trim() !== PLACEHOLDER_URL &&
+               /^https?:\/\//i.test(CLOUD_URL.trim());
+    }
+
+    function showBanner(message, kind) {
+       	const existing = document.getElementById('vm-cloud-banner');
+        if (existing) existing.remove();
+       	const banner = document.createElement('div');
+        banner.id = 'vm-cloud-banner';
+       	const bg = kind === 'warn' ? '#f59e0b' : '#dc2626';
+        banner.style.cssText = [
+            'position:fixed', 'top:0', 'left:0', 'right:0',
+            'z-index:2147483647', 'padding:8px 12px',
+            'background:' + bg, 'color:#fff',
+            'font:bold 13px/1.4 system-ui,Segoe UI,Roboto,sans-serif',
+            'text-align:center', 'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
+            'pointer-events:none'
+        ].join(';');
+        banner.textContent = message;
+        document.documentElement.appendChild(banner);
+    }
+
+    function clearBanner() {
+        const existing = document.getElementById('vm-cloud-banner');
+        if (existing) existing.remove();
+    }
+
+    function setCloudDisabled(reason) {
+        isCloudDisabled = true;
+        showBanner("Spotify→YouTube cloud sync OFFLINE: " + (reason || "unknown error") +
+                   " — clicks won't mark tracks visited. Fix CLOUD_URL or your network.",
+                   "error");
+    }
+
+    function setCloudOnline() {
+        isCloudDisabled = false;
+        lastCloudError = "";
+        clearBanner();
+    }
 
     // Icons
     const ytIconSvg = `<svg role="img" height="16" width="16" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
@@ -61,13 +115,18 @@
     }
 
     function updateIcon(buttonElement, trackId) {
+        // cloud is source of truth — only mark visited if cloud has loaded
+        // AND the id is in the visited set. We never optimistically mark
+        // visited from a click; we wait for the POST to ack first.
         if (isHistoryLoaded && trackId && visitedTracks.has(trackId)) {
             buttonElement.innerHTML = visitedIconSvg;
             buttonElement.title = "Visited (Shift+Click to clear)";
             buttonElement.style.color = "#E22134";
         } else {
             buttonElement.innerHTML = ytIconSvg;
-            buttonElement.title = "Search on YouTube";
+            buttonElement.title = isCloudDisabled
+                ? "Cloud sync offline — click will open YouTube but won't save"
+                : "Search on YouTube";
             buttonElement.style.color = "#b3b3b3";
         }
 
@@ -125,22 +184,31 @@
 
         btn.onclick = (e) => {
             stopHostTrackClick(e, true);
+            // If cloud is down, open YouTube but don't pretend to save.
+            if (isCloudDisabled) {
+                window.open(ytUrl, '_blank');
+                return;
+            }
             if (e.shiftKey) {
                 if (visitedTracks.has(trackId)) {
-                    visitedTracks.delete(trackId);
-                    updateIcon(btn, trackId);
-                    saveToCloud(trackId, `${artistNameForSave} - ${songName}`, "remove");
+                    saveToCloud(trackId, `${artistNameForSave} - ${songName}`, "remove")
+                        .then(() => {
+                            visitedTracks.delete(trackId);
+                            updateIcon(btn, trackId);
+                        })
+                        .catch(() => { /* banner already shown */ });
                 }
-            } else {
-                if (!visitedTracks.has(trackId)) {
+                return;
+            }
+
+            // Normal click — POST to cloud, only mark visited on success.
+            saveToCloud(trackId, `${artistNameForSave} - ${songName}`, "add")
+                .then(() => {
                     visitedTracks.add(trackId);
                     updateIcon(btn, trackId);
-                    saveToCloud(trackId, `${artistNameForSave} - ${songName}`, "add");
-                } else {
-                    saveToCloud(trackId, `${artistNameForSave} - ${songName}`, "add");
-                }
-                window.open(ytUrl, '_blank');
-            }
+                })
+                .catch(() => { /* banner already shown */ });
+            window.open(ytUrl, '_blank');
         };
 
         return btn;
@@ -244,43 +312,127 @@
     }
 
     function fetchHistory() {
+        if (!isCloudUrlConfigured()) {
+            setCloudDisabled("CLOUD_URL not set (still placeholder)");
+            return;
+        }
         const separator = CLOUD_URL.includes("?") ? "&" : "?";
         const noCacheUrl = `${CLOUD_URL}${separator}source=${encodeURIComponent(getCurrentSource())}&t=${Date.now()}`;
-        
+
         GM_xmlhttpRequest({
             method: "GET",
             url: noCacheUrl,
-            anonymous: true, // <--- THE MAGIC FIX: Prevents Google from seeing PC 2's logged-in accounts
+            anonymous: true,
             headers: { "Cache-Control": "no-cache" },
             redirect: "follow",
-            onload: function(response) {
-                try {
-                    const ids = JSON.parse(response.responseText);
-                    visitedTracks = new Set(ids);
-                    isHistoryLoaded = true;
-                    addYoutubeButtons();
-                } catch (e) {
-                    console.error("Cloud Error: Still getting HTML.");
-                    console.error("Response:", response.responseText.substring(0, 150));
+            timeout: 15000,
+            onload: function (response) {
+                if (response.status >= 200 && response.status < 300) {
+                    const contentType = response.responseHeaders || "";
+                    if (/html/i.test(contentType) && !/json/i.test(contentType)) {
+                        // Google login wall returns 200 with HTML
+                        setCloudDisabled("auth wall (got HTML instead of JSON)");
+                        scheduleFetchRetry();
+                        return;
+                    }
+                    try {
+                        const ids = JSON.parse(response.responseText);
+                        if (!Array.isArray(ids)) {
+                            setCloudDisabled("-cloud returned non-array JSON: " +
+                                             response.responseText.slice(0, 100));
+                            scheduleFetchRetry();
+                            return;
+                        }
+                        visitedTracks = new Set(ids.filter(Boolean).map(String));
+                        isHistoryLoaded = true;
+                        setCloudOnline();
+                        addYoutubeButtons();
+                    } catch (parseErr) {
+                        setCloudDisabled("bad JSON: " + parseErr.message +
+                                         " (first 80: " + response.responseText.slice(0, 80) + ")");
+                        scheduleFetchRetry();
+                    }
+                } else {
+                    setCloudDisabled("HTTP " + response.status + " from cloud");
+                    scheduleFetchRetry();
                 }
+            },
+            onerror: function (err) {
+                setCloudDisabled("network error (" + (err && err.error ? err.error : "unknown") + ")");
+                scheduleFetchRetry();
+            },
+            ontimeout: function () {
+                setCloudDisabled("request timed out (15s)");
+                scheduleFetchRetry();
             }
         });
     }
 
+    function scheduleFetchRetry() {
+        if (fetchRetryTimer) return;
+        // exponential-ish backoff: 15s, 30s, 60s, 120s capped
+        let attempt = 0;
+        const tick = () => {
+            fetchRetryTimer = null;
+            if (isHistoryLoaded) return;
+            attempt++;
+            const delay = Math.min(15000 * Math.pow(2, attempt - 1), 120000);
+            console.warn("[Spotify→YT] retrying fetch, attempt " + attempt + " in " + (delay/1000) + "s");
+            fetchHistory();
+            if (!isHistoryLoaded && attempt < 5) {
+                fetchRetryTimer = setTimeout(tick, delay);
+            }
+        };
+        fetchRetryTimer = setTimeout(tick, 15000);
+    }
+
+    // saveToCloud returns a Promise that resolves on confirmed cloud save and
+    // rejects on any failure. The caller must .catch to avoid unhandled rejections.
     function saveToCloud(trackId, songName, action = "add") {
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: CLOUD_URL,
-            anonymous: true, // <--- THE MAGIC FIX applied here too
-            data: JSON.stringify({
-                id: trackId,
-                name: songName,
-                action: action,
-                source: getCurrentSource()
-            }),
-            headers: { "Content-Type": "text/plain" },
-            redirect: "follow",
-            onload: function(response) {}
+        return new Promise((resolve, reject) => {
+            if (!isCloudUrlConfigured()) {
+                setCloudDisabled("CLOUD_URL not set (still placeholder)");
+                reject(new Error("CLOUD_URL not configured"));
+                return;
+            }
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: CLOUD_URL,
+                anonymous: true,
+                data: JSON.stringify({
+                    id: trackId,
+                    name: songName,
+                    action: action,
+                    source: getCurrentSource()
+                }),
+                headers: { "Content-Type": "text/plain" },
+                redirect: "follow",
+                timeout: 15000,
+                onload: function (response) {
+                    let parsed = null;
+                    try { parsed = JSON.parse(response.responseText); } catch (_) {}
+                    const serverErr = parsed && parsed.status === "error";
+                    if (response.status >= 200 && response.status < 300 && !serverErr) {
+                        setCloudOnline();
+                        resolve(parsed || {});
+                    } else {
+                        const msg = parsed && parsed.message
+                            ? parsed.message
+                            : "HTTP " + response.status;
+                        setCloudDisabled("save failed: " + msg);
+                        reject(new Error(msg));
+                    }
+                },
+                onerror: function (err) {
+                    setCloudDisabled("save network error (" +
+                                     (err && err.error ? err.error : "unknown") + ")");
+                    reject(new Error("save network error"));
+                },
+                ontimeout: function () {
+                    setCloudDisabled("save timed out (15s)");
+                    reject(new Error("save timeout"));
+                }
+            });
         });
     }
 

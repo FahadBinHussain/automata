@@ -1,75 +1,130 @@
+var SHEET_NAME_SPOTIFY = "Spotify";
+var SHEET_NAME_SOUNDCLOUD = "SoundCloud";
+var SHEET_NAMES = [SHEET_NAME_SPOTIFY, SHEET_NAME_SOUNDCLOUD];
+
 function doGet(e) {
-  var source = normalizeSource(e.parameter && e.parameter.source);
-  var sheet = source ? getSourceSheet(source) : SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var source = normalizeSource(e && e.parameter && e.parameter.source);
+  if (!source) {
+    return jsonError(400, "Missing or invalid 'source' parameter (expected 'spotify' or 'soundcloud')");
+  }
 
-  if (source) {
+  var sheet;
+  try {
+    sheet = getSourceSheet(source);
+  } catch (err) {
+    return jsonError(500, "Failed to open sheet: " + err.toString());
+  }
+
+  try {
     migrateSourceSheetIds(sheet, source);
+  } catch (err) {
+    // migration is best-effort; don't fail the read
   }
 
-  if (sheet.getLastRow() === 0) {
-    return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+  var lastRow = sheet.getLastRow();
+  if (lastRow === 0) {
+    return jsonResponse(JSON.stringify([]));
   }
 
-  var data = sheet.getDataRange().getValues();
-  var ids = data.map(function(row) {
-    var id = row[0];
-    return source ? canonicalizeTrackId(id, source) : id;
-  }).filter(function(id) { return id && id.length > 0; });
-  return ContentService.createTextOutput(JSON.stringify(ids)).setMimeType(ContentService.MimeType.JSON);
+  var data = sheet.getRange(1, 1, lastRow, 1).getValues();
+  var ids = [];
+  for (var i = 0; i < data.length; i++) {
+    var raw = data[i][0];
+    var id = canonicalizeTrackId(raw, source);
+    if (id) ids.push(id);
+  }
+  return jsonResponse(JSON.stringify(ids));
 }
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
-  lock.tryLock(10000); 
+  if (!lock.tryLock(10000)) {
+    return jsonError(503, "Server busy - could not acquire lock within 10s");
+  }
 
   try {
-    var params = JSON.parse(e.postData.contents);
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonError(400, "Empty request body");
+    }
+    var params;
+    try {
+      params = JSON.parse(e.postData.contents);
+    } catch (parseErr) {
+      return jsonError(400, "Invalid JSON: " + parseErr.toString());
+    }
+    if (!params || typeof params !== "object") {
+      return jsonError(400, "Request body must be a JSON object");
+    }
+
     var rawTargetId = params.id;
-    var action = params.action || "add"; // Default to 'add' if not specified
+    var action = params.action || "add";
     var source = normalizeSource(params.source) || inferSourceFromId(rawTargetId);
+    if (!source) {
+      return jsonError(400, "Missing 'source' and could not infer from id");
+    }
+    if (action !== "add" && action !== "remove") {
+      return jsonError(400, "Invalid action: " + action + " (expected 'add' or 'remove')");
+    }
+
     var targetId = canonicalizeTrackId(rawTargetId, source);
-    
+    if (!targetId) {
+      return jsonError(400, "Missing or empty 'id'");
+    }
+
     var sheet = getSourceSheet(source);
     migrateSourceSheetIds(sheet, source);
-    
-    // Use TextFinder for fast searching
+
     var foundCell = findTrackCell(sheet, targetId, source);
 
     if (action === "remove") {
       if (foundCell) {
-        // Delete the row where the ID was found
         sheet.deleteRow(foundCell.getRow());
-        return ContentService.createTextOutput(JSON.stringify({"status": "deleted"}));
-      } else {
-        return ContentService.createTextOutput(JSON.stringify({"status": "not_found"}));
+        return jsonResponse(JSON.stringify({ status: "deleted", id: targetId }));
       }
-    } 
-    
-    // ACTION IS ADD/UPDATE
-    else {
-      if (foundCell) {
-        // Update existing date
-        if (String(foundCell.getValue() || "") !== targetId) {
-          foundCell.setValue(targetId);
-        }
-        foundCell.offset(0, 2).setValue(new Date());
-        return ContentService.createTextOutput(JSON.stringify({"status": "updated"}));
-      } else {
-        // Create new
-        sheet.appendRow([targetId, params.name, new Date()]);
-        return ContentService.createTextOutput(JSON.stringify({"status": "inserted"}));
-      }
+      return jsonResponse(JSON.stringify({ status: "not_found", id: targetId }));
     }
 
-  } catch(err) {
-    return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": err.toString()}));
+    // action === "add"
+    if (foundCell) {
+      if (String(foundCell.getValue() || "") !== targetId) {
+        foundCell.setValue(targetId);
+      }
+      updateRowTimestamp(sheet, foundCell.getRow());
+      return jsonResponse(JSON.stringify({ status: "updated", id: targetId }));
+    }
+
+    sheet.appendRow([targetId, params.name || "", new Date()]);
+    return jsonResponse(JSON.stringify({ status: "inserted", id: targetId }));
+
+  } catch (err) {
+    return jsonError(500, err.toString());
   } finally {
     lock.releaseLock();
   }
 }
 
+function updateRowTimestamp(sheet, rowNumber) {
+  var maxColumn = sheet.getMaxColumns();
+  if (maxColumn < 3) {
+    sheet.insertColumnsAfter(maxColumn, 3 - maxColumn);
+  }
+  sheet.getRange(rowNumber, 3).setValue(new Date());
+}
+
+function jsonResponse(payload) {
+  return ContentService
+    .createTextOutput(payload)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function jsonError(status, message) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: "error", code: status, message: message }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 function normalizeSource(source) {
-  source = String(source || "").toLowerCase();
+  source = String(source || "").toLowerCase().trim();
   if (source === "spotify" || source === "soundcloud") return source;
   return "";
 }
@@ -77,6 +132,7 @@ function normalizeSource(source) {
 function inferSourceFromId(targetId) {
   targetId = String(targetId || "");
   if (targetId.indexOf("soundcloud:") === 0) return "soundcloud";
+  if (targetId.indexOf("/") === 0 || targetId.indexOf("soundcloud:") === 0) return "soundcloud";
   return "spotify";
 }
 
@@ -86,10 +142,16 @@ function canonicalizeTrackId(targetId, source) {
   if (!targetId) return "";
 
   if (source === "soundcloud") {
-    return targetId.replace(/^soundcloud:/, "").replace(/^\/+/, "");
+    return targetId
+      .replace(/^soundcloud:\/?/, "")
+      .replace(/^\/+/, "");
   }
 
-  return targetId.replace(/^spotify:/, "").replace(/^\/+/, "");
+  // spotify
+  return targetId
+    .replace(/^spotify:\/?/, "")
+    .replace(/^track\//, "")
+    .replace(/^\/+/, "");
 }
 
 function getTrackIdVariants(targetId, source) {
@@ -104,10 +166,12 @@ function getTrackIdVariants(targetId, source) {
   } else {
     variants.push("spotify:" + canonicalId);
     variants.push("spotify:/" + canonicalId);
+    variants.push("track/" + canonicalId);
+    variants.push("/track/" + canonicalId);
   }
 
   var seen = {};
-  return variants.filter(function(id) {
+  return variants.filter(function (id) {
     if (!id || seen[id]) return false;
     seen[id] = true;
     return true;
@@ -121,16 +185,21 @@ function findTrackCell(sheet, targetId, source) {
     var foundCell = finder.findNext();
     if (foundCell) return foundCell;
   }
-
   return null;
 }
 
 function getSourceSheet(source) {
+  source = normalizeSource(source);
+  if (!source) {
+    throw new Error("getSourceSheet called with invalid source: " + source);
+  }
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  var sheetName = source === "soundcloud" ? "SoundCloud" : "Spotify";
+  var sheetName = source === "soundcloud" ? SHEET_NAME_SOUNDCLOUD : SHEET_NAME_SPOTIFY;
   var existingSheet = spreadsheet.getSheetByName(sheetName);
   if (existingSheet) {
-    migrateSoundCloudRows(spreadsheet, source === "soundcloud" ? existingSheet : null);
+    if (source === "soundcloud") {
+      migrateSoundCloudRows(spreadsheet, existingSheet);
+    }
     migrateSourceSheetIds(existingSheet, source);
     return existingSheet;
   }
@@ -146,7 +215,9 @@ function getSourceSheet(source) {
   }
 
   var createdSheet = spreadsheet.insertSheet(sheetName);
-  migrateSoundCloudRows(spreadsheet, source === "soundcloud" ? createdSheet : null);
+  if (source === "soundcloud") {
+    migrateSoundCloudRows(spreadsheet, createdSheet);
+  }
   migrateSourceSheetIds(createdSheet, source);
   return createdSheet;
 }
@@ -175,11 +246,11 @@ function findLegacySpotifySheet(spreadsheet) {
 }
 
 function isManagedSheetName(sheetName) {
-  return sheetName === "Spotify" || sheetName === "SoundCloud";
+  return SHEET_NAMES.indexOf(sheetName) !== -1;
 }
 
 function migrateSoundCloudRows(spreadsheet, knownSoundCloudSheet) {
-  var soundCloudSheet = knownSoundCloudSheet || spreadsheet.getSheetByName("SoundCloud");
+  var soundCloudSheet = knownSoundCloudSheet || spreadsheet.getSheetByName(SHEET_NAME_SOUNDCLOUD);
   if (!soundCloudSheet) return;
 
   var existingIds = getExistingIds(soundCloudSheet, "soundcloud");
@@ -187,27 +258,26 @@ function migrateSoundCloudRows(spreadsheet, knownSoundCloudSheet) {
 
   for (var i = 0; i < sheets.length; i++) {
     var sheet = sheets[i];
-    if (sheet.getName() === "SoundCloud") continue;
+    if (sheet.getName() === SHEET_NAME_SOUNDCLOUD) continue;
 
     var lastRow = sheet.getLastRow();
-    var lastColumn = Math.max(sheet.getLastColumn(), 3);
     if (lastRow < 1) continue;
+    var lastColumn = Math.max(sheet.getLastColumn(), 3);
 
     var values = sheet.getRange(1, 1, lastRow, lastColumn).getValues();
     var rowsToDelete = [];
 
     for (var rowIndex = 0; rowIndex < values.length; rowIndex++) {
       var row = values[rowIndex];
-      var id = String(row[0] || "");
-      if (id.indexOf("soundcloud:") !== 0) continue;
-      var canonicalId = canonicalizeTrackId(id, "soundcloud");
+      var rawId = String(row[0] || "");
+      if (rawId.indexOf("soundcloud:") !== 0) continue;
+      var canonicalId = canonicalizeTrackId(rawId, "soundcloud");
       row[0] = canonicalId;
 
       if (!existingIds[canonicalId]) {
         soundCloudSheet.appendRow(row);
         existingIds[canonicalId] = true;
       }
-
       rowsToDelete.push(rowIndex + 1);
     }
 
@@ -229,7 +299,8 @@ function migrateSourceSheetIds(sheet, source) {
   var changed = false;
 
   for (var i = 0; i < values.length; i++) {
-    var id = String(values[i][0] || "");
+    var raw = values[i][0];
+    var id = String(raw || "");
     if (!id) continue;
 
     var canonicalId = canonicalizeTrackId(id, source);
@@ -249,11 +320,9 @@ function getExistingIds(sheet, source) {
 
   var values = sheet.getRange(1, 1, lastRow, 1).getValues();
   for (var i = 0; i < values.length; i++) {
-    var id = String(values[i][0] || "");
-    if (source) id = canonicalizeTrackId(id, source);
+    var id = canonicalizeTrackId(values[i][0], source);
     if (id) existingIds[id] = true;
   }
-
   return existingIds;
 }
 
@@ -263,7 +332,7 @@ function warmupSourceMigrations() {
   return {
     status: "ok",
     spotifySheetName: spotifySheet.getName(),
-    sheetName: soundCloudSheet.getName()
+    soundCloudSheetName: soundCloudSheet.getName()
   };
 }
 
