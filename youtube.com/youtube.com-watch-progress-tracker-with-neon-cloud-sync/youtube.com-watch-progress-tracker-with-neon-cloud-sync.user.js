@@ -125,6 +125,16 @@ on conflict (video_id) do update set
 		renderList();
 	}
 
+	// Neon's HTTP API is not consistent about how it serializes booleans, so a
+	// finished row can arrive as true, "t", "true", or 1. Anything other than a
+	// real false made the video look unwatched on thumbnails.
+	function truthy(v) {
+		if (typeof v === "boolean") return v;
+		if (typeof v === "number") return v !== 0;
+		if (typeof v === "string") return ["t", "true", "1", "y", "yes"].includes(v.trim().toLowerCase());
+		return false;
+	}
+
 	async function pull() {
 		if (!connStr()) throw new Error(NO_CONN_MSG);
 		const rows = await neonQuery(
@@ -137,11 +147,25 @@ on conflict (video_id) do update set
 				channel: r.channel,
 				position: Number(r.position),
 				duration: Number(r.duration),
-				finished: r.finished === true || r.finished === "t",
+				finished: truthy(r.finished),
 				updatedAt: r.updated_at,
 			};
 			const local = cache[id];
-			cache[id] = local && local.position > remote.position ? local : remote;
+			// Merge field-by-field instead of picking one row wholesale: picking the
+			// higher-position row silently dropped finished=true whenever the other
+			// row had an equal or higher position, which painted 0% bars on videos
+			// that were fully watched.
+			if (!local) {
+				cache[id] = remote;
+			} else {
+				const base = local.position > remote.position ? local : remote;
+				cache[id] = {
+					...base,
+					position: Math.max(local.position || 0, remote.position || 0),
+					duration: remote.duration || local.duration || 0,
+					finished: !!local.finished || !!remote.finished,
+				};
+			}
 		}
 		saveCache();
 		renderList();
@@ -205,12 +229,21 @@ on conflict (video_id) do update set
 		lastWrite = now;
 		const m = meta();
 		const pct = v.currentTime / v.duration;
+		const prev = cache[id];
+		// A currentTime that has snapped back to ~0 is almost never a real seek: it
+		// is the player being torn down, or autoplay loading the next video into the
+		// same <video> element before location.href catches up. Writing that would
+		// clobber a finished entry down to 0, so drop it and keep what we had.
+		if (v.currentTime < 1 && prev && prev.position > 5) return;
+		// Mirror the server's monotonic upsert (greatest(position), finished OR
+		// excluded.finished) so the local cache can never disagree with Neon.
+		const sameVideo = prev && Math.abs((prev.duration || 0) - v.duration) < 1;
 		cache[id] = {
 			title: m.title,
 			channel: m.channel,
-			position: v.currentTime,
+			position: sameVideo ? Math.max(prev.position, v.currentTime) : v.currentTime,
 			duration: v.duration,
-			finished: pct >= FINISH_PCT,
+			finished: (sameVideo && prev.finished) || pct >= FINISH_PCT,
 			updatedAt: new Date().toISOString(),
 		};
 		dirty.add(id);
@@ -264,6 +297,10 @@ on conflict (video_id) do update set
   background:#f00;color:#fff;border:0;cursor:grab;font:600 11px system-ui;box-shadow:0 2px 10px #0007;
   touch-action:none;user-select:none}
 #ytp-btn.ytp-dragging{cursor:grabbing;opacity:.85}
+/* Fullscreen playback: get the launcher and panel out of the way. YouTube may
+   request fullscreen on the player or on a page container, so match any
+   fullscreen descendant rather than assuming which element it is. */
+html.ytp-fs #ytp-btn,html.ytp-fs #ytp-panel{display:none!important}
 #ytp-panel{position:fixed;right:18px;bottom:72px;z-index:99999;width:380px;max-height:70vh;display:none;
   flex-direction:column;background:#0f0f0f;color:#f1f1f1;border:1px solid #303030;border-radius:12px;
   font:13px system-ui;overflow:hidden}
@@ -297,8 +334,8 @@ on conflict (video_id) do update set
 #ytp-dot.fail{background:#e74c3c}
 @keyframes ytp-spin{0%{opacity:.25}50%{opacity:1}100%{opacity:.25}}
 .ytp-thumb-bar{position:absolute;left:0;right:0;bottom:8px;height:4px;background:#0009;z-index:2;pointer-events:none}
-.ytp-thumb-bar i{display:block;height:100%;background:#f00;transition:width .2s}
-.ytp-thumb-bar.done i{background:#909090}`;
+.ytp-thumb-bar i{display:block;height:100%;background:#0f0;transition:width .2s}
+.ytp-thumb-bar.done i{background:#0f0}`;
 
 	const style = document.createElement("style");
 	style.textContent = css;
@@ -364,6 +401,20 @@ on conflict (video_id) do update set
 	);
 
 	document.body.append(btn, panel);
+
+	// Hide the launcher and panel during fullscreen playback. A pure-CSS
+	// :fullscreen / :has() rule did not hold up here, so drive it from the
+	// fullscreenchange event and flag the root element instead. Checking both the
+	// standard and webkit properties covers YouTube's older fullscreen path.
+	function syncFullscreen() {
+		const fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+		document.documentElement.classList.toggle("ytp-fs", fs);
+		// Collapse the panel on the way in so it is not left open behind the video.
+		if (fs) panel.classList.remove("open");
+	}
+	document.addEventListener("fullscreenchange", syncFullscreen);
+	document.addEventListener("webkitfullscreenchange", syncFullscreen);
+	syncFullscreen();
 
 	const $ = (s) => panel.querySelector(s);
 	const status = (m) => ($("#ytp-status").querySelector("span").textContent = m);
@@ -630,11 +681,18 @@ on conflict (key) do update set
 		const box = img?.parentElement || a;
 		if (getComputedStyle(box).position === "static") box.style.position = "relative";
 		let bar = box.querySelector(":scope > .ytp-thumb-bar");
-		if (!e || !e.duration) {
+		// A finished entry must still paint a full bar even if position/duration are
+		// missing or were flattened to 0 by older clobbering writes.
+		if (!e || (!e.duration && !e.finished)) {
 			if (bar) bar.remove();
 			return;
 		}
-		const pct = Math.min(100, Math.round((e.position / e.duration) * 100)) || 0;
+		const rawPct = Math.round((e.position / e.duration) * 100);
+		const pct = e.finished
+			? 100
+			: Number.isFinite(rawPct)
+				? Math.min(100, Math.max(0, rawPct))
+				: 0;
 		if (!bar) {
 			bar = el("div", { class: "ytp-thumb-bar" }, el("i"));
 			box.append(bar);
