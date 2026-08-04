@@ -91,7 +91,9 @@ values ($1, $2, $3, $4, $5, $6, coalesce($7::timestamptz, now()))
 on conflict (video_id) do update set
   title      = excluded.title,
   channel    = excluded.channel,
-  position   = greatest(watch_progress.position, excluded.position),
+  -- Last-write-wins, not greatest(): seeking backwards has to be able to move
+  -- the resume point earlier. greatest() pinned it to the furthest point reached.
+  position   = excluded.position,
   duration   = excluded.duration,
   finished   = watch_progress.finished or excluded.finished,
   -- Store when the video was actually watched, not when the row happened to
@@ -166,10 +168,13 @@ on conflict (video_id) do update set
 			if (!local) {
 				cache[id] = remote;
 			} else {
-				const base = local.position > remote.position ? local : remote;
+				// Pick the more recently written row, not the further-along one. Position
+				// is last-write-wins now, so a rewind has to be able to win over a higher
+				// position recorded earlier.
+				const base = ts(local.updatedAt) >= ts(remote.updatedAt) ? local : remote;
 				cache[id] = {
 					...base,
-					position: Math.max(local.position || 0, remote.position || 0),
+					position: base.position || 0,
 					duration: remote.duration || local.duration || 0,
 					finished: !!local.finished || !!remote.finished,
 					// Keep the newer timestamp. Spreading `base` inherited updatedAt from
@@ -250,13 +255,15 @@ on conflict (video_id) do update set
 		// same <video> element before location.href catches up. Writing that would
 		// clobber a finished entry down to 0, so drop it and keep what we had.
 		if (v.currentTime < 1 && prev && prev.position > 5) return;
-		// Mirror the server's monotonic upsert (greatest(position), finished OR
-		// excluded.finished) so the local cache can never disagree with Neon.
+		// Position is last-write-wins: whatever you were last at is the resume
+		// point, even if you seeked backwards. This used to take max(prev, current),
+		// which meant rewinding then leaving the page kept the furthest-forward time.
+		// `finished` stays sticky so a fully watched video remains marked watched.
 		const sameVideo = prev && Math.abs((prev.duration || 0) - v.duration) < 1;
 		cache[id] = {
 			title: m.title,
 			channel: m.channel,
-			position: sameVideo ? Math.max(prev.position, v.currentTime) : v.currentTime,
+			position: v.currentTime,
 			duration: v.duration,
 			finished: (sameVideo && prev.finished) || pct >= FINISH_PCT,
 			updatedAt: new Date().toISOString(),
@@ -734,11 +741,14 @@ on conflict (key) do update set
 			if (bar) bar.remove();
 			return;
 		}
+		// Show the real position even on a finished video. Forcing 100% here meant a
+		// rewound video kept painting a full bar and hid where you actually left off.
+		// `finished` is only the fallback for entries with no usable duration.
 		const rawPct = Math.round((e.position / e.duration) * 100);
-		const pct = e.finished
-			? 100
-			: Number.isFinite(rawPct)
-				? Math.min(100, Math.max(0, rawPct))
+		const pct = Number.isFinite(rawPct)
+			? Math.min(100, Math.max(0, rawPct))
+			: e.finished
+				? 100
 				: 0;
 		if (!bar) {
 			bar = el("div", { class: "ytp-thumb-bar" }, el("i"));
