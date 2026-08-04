@@ -319,6 +319,9 @@ on conflict (video_id) do update set
   background:#f00;color:#fff;border:0;cursor:grab;font:600 11px system-ui;box-shadow:0 2px 10px #0007;
   touch-action:none;user-select:none}
 #ytp-btn.ytp-dragging{cursor:grabbing;opacity:.85}
+/* Timestamps like "1:04:12" need more room than the logo, so bump the size and
+   tighten tracking to keep it inside the 44px circle. */
+#ytp-btn.ytp-time{font:600 13px/1 system-ui;letter-spacing:-.3px}
 /* Fullscreen playback: get the launcher and panel out of the way. YouTube may
    request fullscreen on the player or on a page container, so match any
    fullscreen descendant rather than assuming which element it is. */
@@ -367,6 +370,34 @@ html.ytp-fs #ytp-btn,html.ytp-fs #ytp-panel{display:none!important}
 	btn.id = "ytp-btn";
 	btn.textContent = "YT\u25B6";
 	btn.title = "Watch progress";
+
+	// On a watch page the launcher is more useful as a readout of the position we
+	// last saved for this video than as a static logo. Everywhere else there is no
+	// single video to report on, so fall back to the logo.
+	const BTN_LOGO = "YT\u25B6";
+	function syncBtnLabel() {
+		const id = location.pathname === "/watch" ? idFromHref(location.href) : null;
+		const e = id ? cache[id] : null;
+		// Below a second there is nothing meaningful saved yet, and "0:00" would read
+		// as a broken label rather than an empty one.
+		if (e && e.position >= 1) {
+			btn.textContent = fmt(e.position);
+			btn.classList.add("ytp-time");
+			btn.title = e.duration
+				? `Saved at ${fmt(e.position)} / ${fmt(e.duration)}`
+				: `Saved at ${fmt(e.position)}`;
+		} else {
+			btn.textContent = BTN_LOGO;
+			btn.classList.remove("ytp-time");
+			btn.title = "Watch progress";
+		}
+	}
+	// Polling rather than hooking every writer: record() is throttled, pull() and
+	// the SPA router both mutate state on their own schedules, and a one second
+	// refresh keeps the label correct without threading calls through all of them.
+	setInterval(syncBtnLabel, 1000);
+	document.addEventListener("yt-navigate-finish", syncBtnLabel);
+	syncBtnLabel();
 
 	// NOTE: YouTube enforces Trusted Types, so innerHTML is blocked on this
 	// document. Everything below is built with real DOM nodes on purpose.
