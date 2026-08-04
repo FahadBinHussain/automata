@@ -598,6 +598,28 @@ on conflict (key) do update set
 		}
 	}
 
+	function retime(a, id, e) {
+		const secs = Math.round(e.position);
+		// A t= at the very end drops you on the end card, so let finished videos
+		// start over instead.
+		if (e.finished || secs < 5) {
+			if (a.dataset.ytpT) {
+				const u = new URL(a.getAttribute("href"), location.origin);
+				u.searchParams.delete("t");
+				a.setAttribute("href", u.pathname + u.search);
+				delete a.dataset.ytpT;
+			}
+			return;
+		}
+		if (a.dataset.ytpT === String(secs)) return;
+		try {
+			const u = new URL(a.getAttribute("href"), location.origin);
+			u.searchParams.set("t", `${secs}s`);
+			a.setAttribute("href", u.pathname + u.search);
+			a.dataset.ytpT = String(secs);
+		} catch {}
+	}
+
 	function paintThumb(a) {
 		const id = idFromHref(a.getAttribute("href") || "");
 		const e = id && cache[id];
@@ -620,6 +642,7 @@ on conflict (key) do update set
 		bar.classList.toggle("done", !!e.finished);
 		bar.firstChild.style.width = `${pct}%`;
 		bar.title = `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}% (${Math.round(e.position)}s)`;
+		retime(a, id, e);
 	}
 
 	let paintQueued = false;
