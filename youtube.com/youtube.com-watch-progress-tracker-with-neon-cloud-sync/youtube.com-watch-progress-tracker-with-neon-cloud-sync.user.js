@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.4.0
+// @version      0.4.1
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -36,9 +36,12 @@
 	const FINISH_PCT = 0.9;
 	const K_CONN = "neonConnStr";
 	const K_CACHE = "progressCache";
+	const NO_CONN_MSG = "no neon connection string - fill it in settings first";
 
 	let cache = JSON.parse(GM_getValue(K_CACHE, "{}"));
-	let dirty = new Set();
+	const K_DIRTY = "progressDirty";
+	let dirty = new Set(JSON.parse(GM_getValue(K_DIRTY, "[]")));
+	const saveDirty = () => GM_setValue(K_DIRTY, JSON.stringify([...dirty]));
 	let bound = null;
 	let lastWrite = 0;
 
@@ -100,6 +103,7 @@ on conflict (video_id) do update set
 			const e = cache[id];
 			if (!e) {
 				dirty.delete(id);
+				saveDirty();
 				continue;
 			}
 			try {
@@ -112,6 +116,7 @@ on conflict (video_id) do update set
 					e.finished,
 				]);
 				dirty.delete(id);
+				saveDirty();
 			} catch (err) {
 				console.warn("[yt-progress] flush failed", err);
 				return; // keep dirty, retry next tick
@@ -121,28 +126,58 @@ on conflict (video_id) do update set
 	}
 
 	async function pull() {
+		if (!connStr()) throw new Error(NO_CONN_MSG);
+		const rows = await neonQuery(
+			"select video_id, title, channel, position, duration, finished, updated_at from watch_progress order by updated_at desc limit 200"
+		);
+		for (const r of rows) {
+			const id = r.video_id;
+			const remote = {
+				title: r.title,
+				channel: r.channel,
+				position: Number(r.position),
+				duration: Number(r.duration),
+				finished: r.finished === true || r.finished === "t",
+				updatedAt: r.updated_at,
+			};
+			const local = cache[id];
+			cache[id] = local && local.position > remote.position ? local : remote;
+		}
+		saveCache();
+		renderList();
+		return rows.length;
+	}
+
+	let syncing = false;
+	const PUSH_DEBOUNCE_MS = 5000;
+	let pushTimer = null;
+
+	function schedulePush() {
 		if (!connStr()) return;
+		clearTimeout(pushTimer);
+		pushTimer = setTimeout(() => autoSync("progress"), PUSH_DEBOUNCE_MS);
+	}
+
+	async function autoSync(reason) {
+		if (!connStr() || syncing) return;
+		syncing = true;
+		syncState("busy");
 		try {
-			const rows = await neonQuery(
-				"select video_id, title, channel, position, duration, finished, updated_at from watch_progress order by updated_at desc limit 200"
-			);
-			for (const r of rows) {
-				const id = r.video_id;
-				const remote = {
-					title: r.title,
-					channel: r.channel,
-					position: Number(r.position),
-					duration: Number(r.duration),
-					finished: r.finished === true || r.finished === "t",
-					updatedAt: r.updated_at,
-				};
-				const local = cache[id];
-				cache[id] = local && local.position > remote.position ? local : remote;
-			}
-			saveCache();
-			renderList();
-		} catch (err) {
-			console.warn("[yt-progress] pull failed", err);
+			record(true);
+			for (const id of Object.keys(cache)) dirty.add(id);
+			saveDirty();
+			const pushing = dirty.size;
+			await flush();
+			if (dirty.size) throw new Error(`${dirty.size} of ${pushing} rows failed to upload`);
+			const pulled = await pull();
+			syncState("ok");
+			status(`synced - pushed ${pushing}, ${pulled} rows in neon`);
+		} catch (e) {
+			syncState("fail");
+			status(`sync failed - ${e.message}`);
+			console.warn(`[yt-progress] autoSync(${reason}) failed`, e);
+		} finally {
+			syncing = false;
 		}
 	}
 
@@ -180,6 +215,8 @@ on conflict (video_id) do update set
 		};
 		dirty.add(id);
 		saveCache();
+		saveDirty();
+		schedulePush();
 	}
 
 	function bind() {
@@ -199,7 +236,18 @@ on conflict (video_id) do update set
 	});
 	window.addEventListener("beforeunload", () => record(true));
 	setInterval(bind, 2000);
-	setInterval(flush, FLUSH_MS);
+	setInterval(() => autoSync("tick"), FLUSH_MS);
+	document.addEventListener("visibilitychange", () => {
+		if (document.visibilityState === "visible") autoSync("focus");
+		else {
+			clearTimeout(pushTimer);
+			autoSync("hidden");
+		}
+	});
+	window.addEventListener("pagehide", () => {
+		clearTimeout(pushTimer);
+		record(true);
+	});
 
 	// --- ui ---------------------------------------------------------------
 
@@ -243,6 +291,11 @@ on conflict (video_id) do update set
   background:#272727;color:#f1f1f1}
 .ytp-act button.p{background:#f00;color:#fff}
 #ytp-status{margin-top:8px;font-size:11px;color:#aaa;min-height:14px}
+#ytp-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:#555;transition:background .2s}
+#ytp-dot.busy{background:#3ea6ff;animation:ytp-spin .8s linear infinite}
+#ytp-dot.ok{background:#2ecc71}
+#ytp-dot.fail{background:#e74c3c}
+@keyframes ytp-spin{0%{opacity:.25}50%{opacity:1}100%{opacity:.25}}
 .ytp-thumb-bar{position:absolute;left:0;right:0;bottom:8px;height:4px;background:#0009;z-index:2;pointer-events:none}
 .ytp-thumb-bar i{display:block;height:100%;background:#f00;transition:width .2s}
 .ytp-thumb-bar.done i{background:#909090}`;
@@ -306,14 +359,25 @@ on conflict (video_id) do update set
 				el("button", { "data-a": "init", text: "Create table" }),
 				el("button", { "data-a": "sync", text: "Sync now" })
 			),
-			el("div", { id: "ytp-status" })
+			el("div", { id: "ytp-status" }, el("i", { id: "ytp-dot" }), el("span", { text: "" }))
 		)
 	);
 
 	document.body.append(btn, panel);
 
 	const $ = (s) => panel.querySelector(s);
-	const status = (m) => ($("#ytp-status").textContent = m);
+	const status = (m) => ($("#ytp-status").querySelector("span").textContent = m);
+
+	let dotTimer = null;
+	function syncState(s) {
+		const dot = $("#ytp-dot");
+		if (!dot) return;
+		clearTimeout(dotTimer);
+		dot.className = s === "idle" ? "" : s;
+		if (s === "ok" || s === "fail") {
+			dotTimer = setTimeout(() => (dot.className = ""), 2500);
+		}
+	}
 
 	btn.onclick = () => {
 		if (btn.dataset.dragged === "1") {
@@ -461,11 +525,12 @@ on conflict (key) do update set
 	};
 
 	panel.querySelector('[data-a="sync"]').onclick = async () => {
+		if (!connStr()) {
+			status("no neon connection string - fill it in settings first");
+			return;
+		}
 		status("syncing...");
-		record(true);
-		await flush();
-		await pull();
-		status(`synced - ${Object.keys(cache).length} videos`);
+		await autoSync("manual");
 	};
 
 	function renderList() {
@@ -501,9 +566,9 @@ on conflict (key) do update set
 						{ class: "ytp-meta" },
 						el("span", { text: e.channel || "" }),
 						el("span", {
-							text: `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}%${
-								e.finished ? " done" : ""
-							}`,
+							text: `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}% (${Math.round(
+								e.position
+							)}s)${e.finished ? " done" : ""}`,
 						}),
 					)
 				)
@@ -536,7 +601,13 @@ on conflict (key) do update set
 	function paintThumb(a) {
 		const id = idFromHref(a.getAttribute("href") || "");
 		const e = id && cache[id];
-		let bar = a.querySelector(":scope > .ytp-thumb-bar");
+		// Anchor the overlay to the rendered <img> box. The <a> and its wrappers are
+		// often wider than the painted image (letterboxing / stretched grid cell),
+		// so we measure the image and offset the bar to match it exactly.
+		const img = a.querySelector("yt-image img, #thumbnail img, img");
+		const box = img?.parentElement || a;
+		if (getComputedStyle(box).position === "static") box.style.position = "relative";
+		let bar = box.querySelector(":scope > .ytp-thumb-bar");
 		if (!e || !e.duration) {
 			if (bar) bar.remove();
 			return;
@@ -544,12 +615,11 @@ on conflict (key) do update set
 		const pct = Math.min(100, Math.round((e.position / e.duration) * 100)) || 0;
 		if (!bar) {
 			bar = el("div", { class: "ytp-thumb-bar" }, el("i"));
-			if (getComputedStyle(a).position === "static") a.style.position = "relative";
-			a.append(bar);
+			box.append(bar);
 		}
 		bar.classList.toggle("done", !!e.finished);
 		bar.firstChild.style.width = `${pct}%`;
-		bar.title = `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}%`;
+		bar.title = `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}% (${Math.round(e.position)}s)`;
 	}
 
 	let paintQueued = false;
@@ -570,6 +640,11 @@ on conflict (key) do update set
 	setInterval(paintThumbs, 3000);
 
 	bind();
-	pull().then(paintThumbs);
+	pull()
+		.then(paintThumbs)
+		.catch((err) => {
+			if (err && err.message === NO_CONN_MSG) return;
+			console.warn("[yt-progress] initial pull failed", err);
+		});
 	paintThumbs();
 })();
