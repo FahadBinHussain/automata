@@ -14,8 +14,18 @@ create table if not exists watch_progress (
 create index if not exists watch_progress_updated_at_idx
   on watch_progress (updated_at desc);
 
+-- floating launcher icon position, synced across devices.
+-- one row per ui element, keyed by name ('ytp-btn').
+create table if not exists ui_prefs (
+  key        text primary key,
+  x          integer not null,
+  y          integer not null,
+  updated_at timestamptz not null default now()
+);
+
 -- scoped role - use this connection string in the settings tab,
 -- NOT the project owner one.
 --
 --   create role yt_progress with login password 'something-long';
 --   grant select, insert, update on watch_progress to yt_progress;
+--   grant select, insert, update on ui_prefs to yt_progress;
