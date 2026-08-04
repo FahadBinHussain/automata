@@ -87,14 +87,18 @@
 
 	const SQL_UPSERT = `
 insert into watch_progress (video_id, title, channel, position, duration, finished, updated_at)
-values ($1, $2, $3, $4, $5, $6, now())
+values ($1, $2, $3, $4, $5, $6, coalesce($7::timestamptz, now()))
 on conflict (video_id) do update set
   title      = excluded.title,
   channel    = excluded.channel,
   position   = greatest(watch_progress.position, excluded.position),
   duration   = excluded.duration,
   finished   = watch_progress.finished or excluded.finished,
-  updated_at = now()`;
+  -- Store when the video was actually watched, not when the row happened to
+  -- sync. Pushes are debounced and retried, so now() drifted later than
+  -- reality and could sort a row above something watched after it. greatest()
+  -- keeps the timestamp monotonic if an older queued write arrives late.
+  updated_at = greatest(watch_progress.updated_at, coalesce($7::timestamptz, now()))`;
 
 	async function flush() {
 		if (!connStr() || dirty.size === 0) return;
@@ -114,6 +118,10 @@ on conflict (video_id) do update set
 					Math.round(e.position),
 					Math.round(e.duration),
 					e.finished,
+					// Send the watch time recorded locally. Entries written by older
+					// versions of the script have no updatedAt at all, so pass null and
+					// let the server fall back to now() rather than sending undefined.
+					e.updatedAt || null,
 				]);
 				dirty.delete(id);
 				saveDirty();
@@ -164,6 +172,13 @@ on conflict (video_id) do update set
 					position: Math.max(local.position || 0, remote.position || 0),
 					duration: remote.duration || local.duration || 0,
 					finished: !!local.finished || !!remote.finished,
+					// Keep the newer timestamp. Spreading `base` inherited updatedAt from
+					// whichever row had the higher position, which could be the older one,
+					// and that stale value then decided the list order.
+					updatedAt:
+						ts(local.updatedAt) >= ts(remote.updatedAt)
+							? local.updatedAt
+							: remote.updatedAt,
 				};
 			}
 		}
@@ -584,10 +599,40 @@ on conflict (key) do update set
 		await autoSync("manual");
 	};
 
+	// updatedAt reaches the cache in two shapes: record() writes a UTC ISO string
+	// ending in Z, while Neon returns "2026-08-04 09:12:33.123456" with no zone.
+	// new Date() reads that naive form as local time, so pulled rows were skewed by
+	// the local UTC offset and interleaved wrongly with locally recorded ones.
+	// Normalize to epoch ms, treating a missing zone as UTC, and treat unparseable
+	// values as oldest rather than NaN (NaN comparisons leave order untouched,
+	// which is what pinned stale rows at the top).
+	function ts(v) {
+		if (!v) return 0;
+		if (typeof v === "number") return v;
+		let s = String(v).trim();
+		if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) s = s.replace(" ", "T") + "Z";
+		const n = Date.parse(s);
+		return Number.isFinite(n) ? n : 0;
+	}
+
+	// Short "how long ago" label for the list rows. Showing the sort key makes the
+	// ordering verifiable at a glance instead of having to trust it.
+	function ago(ms) {
+		if (!ms) return "";
+		const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+		if (s < 60) return "just now";
+		const m = Math.floor(s / 60);
+		if (m < 60) return `${m}m ago`;
+		const h = Math.floor(m / 60);
+		if (h < 24) return `${h}h ago`;
+		return `${Math.floor(h / 24)}d ago`;
+	}
+
 	function renderList() {
 		const body = panel.querySelector('[data-b="list"]');
+		// Most recently played first.
 		const rows = Object.entries(cache).sort(
-			(a, b) => new Date(b[1].updatedAt) - new Date(a[1].updatedAt)
+			(a, b) => ts(b[1].updatedAt) - ts(a[1].updatedAt)
 		);
 		body.replaceChildren();
 		if (!rows.length) {
@@ -615,7 +660,9 @@ on conflict (key) do update set
 					el(
 						"div",
 						{ class: "ytp-meta" },
-						el("span", { text: e.channel || "" }),
+						el("span", {
+						text: [e.channel || "", ago(ts(e.updatedAt))].filter(Boolean).join(" - "),
+					}),
 						el("span", {
 							text: `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}% (${Math.round(
 								e.position
