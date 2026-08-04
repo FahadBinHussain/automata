@@ -705,9 +705,14 @@ on conflict (key) do update set
 
 	function retime(a, id, e) {
 		const secs = Math.round(e.position);
-		// A t= at the very end drops you on the end card, so let finished videos
-		// start over instead.
-		if (e.finished || secs < 5) {
+		// A t= at the very end drops you on the end card, so skip injection there and
+		// let the video start over. Keying this off `finished` instead of the actual
+		// position was wrong: `finished` is sticky and never clears, so once a video
+		// was completed its link stayed plain forever - even after rewinding to the
+		// middle. That is why History links stopped getting timestamps.
+		const dur = e.duration || 0;
+		const nearEnd = dur > 0 && secs >= dur - 10;
+		if (nearEnd || secs < 5) {
 			if (a.dataset.ytpT) {
 				const u = new URL(a.getAttribute("href"), location.origin);
 				u.searchParams.delete("t");
@@ -724,6 +729,97 @@ on conflict (key) do update set
 			a.dataset.ytpT = String(secs);
 		} catch {}
 	}
+
+	// YouTube's SPA router never reads the href we rewrote. Clicking a thumbnail
+	// fires an internal navigation endpoint that carries YouTube's own resume
+	// timestamp, so our t= is dropped and the player jumps to their tracked
+	// position instead. Stash the position we want on click, then seek once the
+	// player for that exact video is actually ready.
+	const K_SEEK = "pendingSeek";
+	const SEEK_TTL_MS = 30000;
+
+	function takeSeek() {
+		let p = null;
+		try {
+			p = JSON.parse(GM_getValue(K_SEEK, "null"));
+		} catch {}
+		if (!p || !p.id) return null;
+		// Only honour a very recent click, otherwise a stale value could hijack a
+		// later navigation the user made some other way.
+		if (Date.now() - (p.at || 0) > SEEK_TTL_MS) {
+			GM_setValue(K_SEEK, "null");
+			return null;
+		}
+		return p;
+	}
+
+	function applySeek(tries) {
+		tries = tries || 0;
+		const p = takeSeek();
+		if (!p) return;
+		const retry = () => {
+			if (tries < 24) setTimeout(() => applySeek(tries + 1), 250);
+		};
+		// Wait for the URL to settle on the clicked video before touching anything.
+		if (idFromHref(location.href) !== p.id) return retry();
+		const v = document.querySelector("video");
+		if (!v || !Number.isFinite(v.duration) || !v.duration) return retry();
+		if (Math.abs(v.currentTime - p.secs) > 2) {
+			v.currentTime = p.secs;
+			// YouTube applies its own resume slightly after the player becomes ready,
+			// so verify the seek actually stuck rather than assuming one write wins.
+			if (tries < 24) setTimeout(() => applySeek(tries + 1), 400);
+			return;
+		}
+		GM_setValue(K_SEEK, "null");
+	}
+
+	// Capture phase, because YouTube's own handlers stop propagation.
+	document.addEventListener(
+		"click",
+		(ev) => {
+			// Thumbnails live inside web components, so walk the composed path instead
+			// of relying on closest() from the retargeted event target.
+			const path = ev.composedPath ? ev.composedPath() : [];
+			const a =
+				path.find(
+					(n) =>
+						n &&
+						n.tagName === "A" &&
+						(n.getAttribute?.("href") || "").includes("/watch?v="),
+				) || ev.target?.closest?.("a[href*='/watch?v=']");
+			if (!a || !a.dataset.ytpT) return;
+			const href = a.getAttribute("href") || "";
+			const id = idFromHref(href);
+			const secs = Number(a.dataset.ytpT);
+			if (!id || !Number.isFinite(secs)) return;
+			GM_setValue(K_SEEK, JSON.stringify({ id, secs, at: Date.now() }));
+			// Let the browser handle modified clicks (new tab, new window, download)
+			// normally - those already do a real load and honour the href's t=.
+			if (
+				ev.button !== 0 ||
+				ev.ctrlKey ||
+				ev.metaKey ||
+				ev.shiftKey ||
+				ev.altKey ||
+				ev.defaultPrevented
+			) {
+				return;
+			}
+			// Seeking after the SPA navigation was not enough: YouTube owns the player
+			// and reapplies its own resume position. Cancel its routing entirely and do
+			// a real navigation to our href, which the watch page parses on load.
+			// stopImmediatePropagation is required because YouTube's delegated click
+			// handler is also on document and would otherwise still route.
+			ev.preventDefault();
+			ev.stopImmediatePropagation();
+			location.assign(href);
+		},
+		true,
+	);
+
+	document.addEventListener("yt-navigate-finish", () => setTimeout(applySeek, 300));
+	if (location.pathname === "/watch") setTimeout(applySeek, 800);
 
 	function paintThumb(a) {
 		const id = idFromHref(a.getAttribute("href") || "");
