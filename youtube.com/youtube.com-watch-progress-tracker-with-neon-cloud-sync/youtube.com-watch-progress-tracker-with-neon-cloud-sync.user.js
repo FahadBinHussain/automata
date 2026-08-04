@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.1.0
-// @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab.
+// @version      0.4.0
+// @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
 // @run-at       document-idle
@@ -213,18 +213,23 @@ on conflict (video_id) do update set
 
 	const css = `
 #ytp-btn{position:fixed;right:18px;bottom:18px;z-index:99999;width:44px;height:44px;border-radius:50%;
-  background:#f00;color:#fff;border:0;cursor:pointer;font:600 11px system-ui;box-shadow:0 2px 10px #0007}
+  background:#f00;color:#fff;border:0;cursor:grab;font:600 11px system-ui;box-shadow:0 2px 10px #0007;
+  touch-action:none;user-select:none}
+#ytp-btn.ytp-dragging{cursor:grabbing;opacity:.85}
 #ytp-panel{position:fixed;right:18px;bottom:72px;z-index:99999;width:380px;max-height:70vh;display:none;
   flex-direction:column;background:#0f0f0f;color:#f1f1f1;border:1px solid #303030;border-radius:12px;
   font:13px system-ui;overflow:hidden}
-#ytp-panel.open{display:flex}
+#ytp-panel.open{display:flex;flex-direction:column;box-sizing:border-box;min-width:0}
 #ytp-tabs{display:flex;border-bottom:1px solid #303030}
 #ytp-tabs button{flex:1;padding:10px;background:none;border:0;color:#aaa;cursor:pointer;font:600 13px system-ui}
 #ytp-tabs button.on{color:#fff;box-shadow:inset 0 -2px 0 #f00}
-.ytp-body{overflow-y:auto;padding:10px;display:none}
+#ytp-panel,#ytp-panel *{box-sizing:border-box}
+.ytp-body{overflow-y:auto;padding:10px 12px;display:none;width:100%}
 .ytp-body.on{display:block}
-.ytp-row{padding:8px 6px;border-bottom:1px solid #222}
-.ytp-row a{color:#f1f1f1;text-decoration:none;display:block;line-height:1.3;margin-bottom:5px}
+.ytp-row{padding:8px 6px;border-bottom:1px solid #222;min-width:0;overflow:hidden}
+.ytp-row a{color:#f1f1f1;text-decoration:none;display:block;line-height:1.3;margin-bottom:5px;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;overflow-wrap:anywhere}
 .ytp-row a:hover{color:#3ea6ff}
 .ytp-bar{height:4px;background:#303030;border-radius:2px;overflow:hidden}
 .ytp-bar i{display:block;height:100%;background:#f00}
@@ -237,7 +242,10 @@ on conflict (video_id) do update set
 .ytp-act button{flex:1;padding:8px;border:0;border-radius:6px;cursor:pointer;font:600 12px system-ui;
   background:#272727;color:#f1f1f1}
 .ytp-act button.p{background:#f00;color:#fff}
-#ytp-status{margin-top:8px;font-size:11px;color:#aaa;min-height:14px}`;
+#ytp-status{margin-top:8px;font-size:11px;color:#aaa;min-height:14px}
+.ytp-thumb-bar{position:absolute;left:0;right:0;bottom:8px;height:4px;background:#0009;z-index:2;pointer-events:none}
+.ytp-thumb-bar i{display:block;height:100%;background:#f00;transition:width .2s}
+.ytp-thumb-bar.done i{background:#909090}`;
 
 	const style = document.createElement("style");
 	style.textContent = css;
@@ -308,9 +316,111 @@ on conflict (video_id) do update set
 	const status = (m) => ($("#ytp-status").textContent = m);
 
 	btn.onclick = () => {
+		if (btn.dataset.dragged === "1") {
+			delete btn.dataset.dragged;
+			return; // a drag just ended, do not toggle the panel
+		}
 		panel.classList.toggle("open");
 		if (panel.classList.contains("open")) renderList();
 	};
+
+	// --- draggable launcher (position synced to Neon) ----------------------
+
+	const K_POS = "btnPos";
+	const POS_KEY = "ytp-btn";
+	const SQL_POS_UPSERT = `
+insert into ui_prefs (key, x, y, updated_at)
+values ($1, $2, $3, now())
+on conflict (key) do update set
+  x          = excluded.x,
+  y          = excluded.y,
+  updated_at = now()`;
+
+	const clamp = (v, max) => Math.max(0, Math.min(v, max));
+
+	function applyPos(p) {
+		if (!p || typeof p.x !== "number" || typeof p.y !== "number") return;
+		const x = clamp(p.x, innerWidth - btn.offsetWidth);
+		const y = clamp(p.y, innerHeight - btn.offsetHeight);
+		Object.assign(btn.style, { left: `${x}px`, top: `${y}px`, right: "auto", bottom: "auto" });
+		// keep the panel anchored to the button instead of the viewport corner
+		const above = y > innerHeight / 2;
+		Object.assign(panel.style, {
+			left: `${clamp(x + btn.offsetWidth - 380, innerWidth - 380 - 8)}px`,
+			right: "auto",
+			top: above ? "auto" : `${y + btn.offsetHeight + 10}px`,
+			bottom: above ? `${innerHeight - y + 10}px` : "auto",
+		});
+	}
+
+	applyPos(JSON.parse(GM_getValue(K_POS, "null")));
+
+	async function savePos(p) {
+		GM_setValue(K_POS, JSON.stringify(p));
+		if (!connStr()) return;
+		try {
+			await neonQuery(SQL_POS_UPSERT, [POS_KEY, Math.round(p.x), Math.round(p.y)]);
+		} catch (err) {
+			console.warn("[yt-progress] icon position sync failed", err);
+		}
+	}
+
+	async function pullPos() {
+		if (!connStr()) return;
+		try {
+			const rows = await neonQuery("select x, y from ui_prefs where key = $1", [POS_KEY]);
+			if (!rows.length) return;
+			const p = { x: Number(rows[0].x), y: Number(rows[0].y) };
+			GM_setValue(K_POS, JSON.stringify(p));
+			applyPos(p);
+		} catch (err) {
+			console.warn("[yt-progress] icon position pull failed", err);
+		}
+	}
+
+	(function makeDraggable() {
+		let id = null;
+		let dx = 0;
+		let dy = 0;
+		let moved = false;
+
+		btn.addEventListener("pointerdown", (e) => {
+			if (e.button !== 0) return;
+			id = e.pointerId;
+			moved = false;
+			const r = btn.getBoundingClientRect();
+			dx = e.clientX - r.left;
+			dy = e.clientY - r.top;
+			btn.setPointerCapture(id);
+			btn.classList.add("ytp-dragging");
+		});
+
+		btn.addEventListener("pointermove", (e) => {
+			if (id === null || e.pointerId !== id) return;
+			if (!moved && Math.abs(e.movementX) + Math.abs(e.movementY) < 1) return;
+			moved = true;
+			applyPos({ x: e.clientX - dx, y: e.clientY - dy });
+		});
+
+		const end = (e) => {
+			if (id === null || (e && e.pointerId !== id)) return;
+			btn.releasePointerCapture(id);
+			id = null;
+			btn.classList.remove("ytp-dragging");
+			if (!moved) return;
+			btn.dataset.dragged = "1"; // suppress the click that follows a drag
+			const r = btn.getBoundingClientRect();
+			savePos({ x: r.left, y: r.top });
+		};
+
+		btn.addEventListener("pointerup", end);
+		btn.addEventListener("pointercancel", end);
+		addEventListener("resize", () =>
+			applyPos(JSON.parse(GM_getValue(K_POS, "null")))
+		);
+	})();
+
+	pullPos();
 
 	panel.querySelectorAll("#ytp-tabs button").forEach((b) => {
 		b.onclick = () => {
@@ -339,7 +449,12 @@ on conflict (video_id) do update set
   duration   integer not null,
   finished   boolean not null default false,
   updated_at timestamptz not null default now())`);
-			status("table ready");
+			await neonQuery(`create table if not exists ui_prefs (
+  key        text primary key,
+  x          integer not null,
+  y          integer not null,
+  updated_at timestamptz not null default now())`);
+			status("tables ready");
 		} catch (e) {
 			status(String(e.message));
 		}
@@ -396,6 +511,65 @@ on conflict (video_id) do update set
 		}
 	}
 
+	// --- thumbnail overlays -------------------------------------------------
+	// Paints a red progress bar on every video thumbnail on the page, using the
+	// same cache the panel reads from. Trusted Types safe: real DOM nodes only.
+
+	// YouTube's newer lockup renderer uses camelCase classes
+	// (ytLockupViewModelContentImage), not the dashed BEM-ish names the older
+	// ytd-* renderers used. Keep both so home/search/sidebar all work.
+	const THUMB_SEL = [
+		"a#thumbnail[href*='/watch?v=']",
+		"a.ytd-thumbnail[href*='/watch?v=']",
+		"a.ytLockupViewModelContentImage[href*='/watch?v=']",
+		"a.yt-lockup-view-model-wiz__content-image[href*='/watch?v=']",
+	].join(",");
+
+	function idFromHref(href) {
+		try {
+			return new URL(href, location.origin).searchParams.get("v");
+		} catch {
+			return null;
+		}
+	}
+
+	function paintThumb(a) {
+		const id = idFromHref(a.getAttribute("href") || "");
+		const e = id && cache[id];
+		let bar = a.querySelector(":scope > .ytp-thumb-bar");
+		if (!e || !e.duration) {
+			if (bar) bar.remove();
+			return;
+		}
+		const pct = Math.min(100, Math.round((e.position / e.duration) * 100)) || 0;
+		if (!bar) {
+			bar = el("div", { class: "ytp-thumb-bar" }, el("i"));
+			if (getComputedStyle(a).position === "static") a.style.position = "relative";
+			a.append(bar);
+		}
+		bar.classList.toggle("done", !!e.finished);
+		bar.firstChild.style.width = `${pct}%`;
+		bar.title = `${fmt(e.position)} / ${fmt(e.duration)} - ${pct}%`;
+	}
+
+	let paintQueued = false;
+	function paintThumbs() {
+		if (paintQueued) return;
+		paintQueued = true;
+		requestAnimationFrame(() => {
+			paintQueued = false;
+			document.querySelectorAll(THUMB_SEL).forEach(paintThumb);
+		});
+	}
+
+	new MutationObserver(paintThumbs).observe(document.documentElement, {
+		childList: true,
+		subtree: true,
+	});
+	document.addEventListener("yt-navigate-finish", () => setTimeout(paintThumbs, 500));
+	setInterval(paintThumbs, 3000);
+
 	bind();
-	pull();
+	pull().then(paintThumbs);
+	paintThumbs();
 })();
