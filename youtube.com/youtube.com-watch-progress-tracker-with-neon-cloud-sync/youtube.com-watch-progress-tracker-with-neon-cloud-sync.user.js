@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.3
+// @version      0.5.6
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -35,7 +35,9 @@
 	const FLUSH_MS = 120000;
 	// seconds of tolerance: only a position within half a second of the end
 	// counts as fully watched, so "done" (cyan) means actually finished
-	const FINISH_TOL = 0.5;
+	// 1s slack because a paused seek-to-the-end clamps a fraction under the
+	// true duration and would otherwise never count as done
+	const FINISH_TOL = 1;
 	const K_CONN = "neonConnStr";
 	const K_CACHE = "progressCache";
 	const NO_CONN_MSG = "no neon connection string - fill it in settings first";
@@ -300,6 +302,25 @@ on conflict (video_id) do update set
 		v.addEventListener("pause", () => {
 			record(true);
 			flush();
+		});
+		// Seeked-to-the-end must still be marked finished: after the video
+		// actually ends, currentTime sits at duration and the `ended` event is
+		// the reliable signal. timeupdate can fire early (throttled, slightly
+		// under duration) and pause never fires when autoplay loads the next
+		// video into the same element.
+		v.addEventListener("ended", () => {
+			record(true);
+			flush();
+		});
+		// Seeking straight to the end never fires `ended` (it only fires while
+		// playing), and the player clamps the seek a hair under duration - so
+		// a drag-to-the-end used to sit there unfinished forever. Catch the
+		// seeked landing instead and count it as finished.
+		v.addEventListener("seeked", () => {
+			if (v.currentTime >= v.duration - FINISH_TOL) {
+				record(true);
+				flush();
+			}
 		});
 	}
 
@@ -761,28 +782,22 @@ on conflict (key) do update set
 
 	function retime(a, id, e) {
 		const secs = Math.round(e.position);
-		// A t= at the very end drops you on the end card, so skip injection there and
-		// let the video start over. Keying this off `finished` instead of the actual
-		// position was wrong: `finished` is sticky and never clears, so once a video
-		// was completed its link stayed plain forever - even after rewinding to the
-		// middle. That is why History links stopped getting timestamps.
+		// Our timestamp must win over YouTube's own resume link. A t= exactly at
+		// the very end drops you on the end card, so cap it 2s short of duration
+		// instead of removing our stamp: since ended videos now record position ==
+		// duration, skipping left links wearing YouTube's official timestamp again.
+		// Keying this off `finished` instead of the actual position was also wrong:
+		// `finished` is sticky and never clears, so once a video was completed its
+		// link stayed plain forever - even after rewinding to the middle.
 		const dur = e.duration || 0;
-		const nearEnd = dur > 0 && secs >= dur - 10;
-		if (nearEnd || secs < 5) {
-			if (a.dataset.ytpT) {
-				const u = new URL(a.getAttribute("href"), location.origin);
-				u.searchParams.delete("t");
-				a.setAttribute("href", u.pathname + u.search);
-				delete a.dataset.ytpT;
-			}
-			return;
-		}
-		if (a.dataset.ytpT === String(secs)) return;
+		if (secs < 1 || !(dur > 0)) return;
+		const t = Math.min(secs, Math.max(1, dur - 2));
+		if (a.dataset.ytpT === String(t)) return;
 		try {
 			const u = new URL(a.getAttribute("href"), location.origin);
-			u.searchParams.set("t", `${secs}s`);
+			u.searchParams.set("t", `${t}s`);
 			a.setAttribute("href", u.pathname + u.search);
-			a.dataset.ytpT = String(secs);
+			a.dataset.ytpT = String(t);
 		} catch {}
 	}
 
