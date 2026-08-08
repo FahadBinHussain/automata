@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      17.8
+// @version      17.9
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries on YouTube History and Playlists.
@@ -97,6 +97,10 @@
     let feedbackTimer = 0;
     let hoveredCard = null;
     let hoverRestoreTimer = 0;
+    // Video IDs seen as fully watched on this page session. During hover the
+    // native bar is hidden, so a re-scan would otherwise un-mark cards that
+    // are still watched. Persisting the IDs keeps the dim/duplicate marks on.
+    let watchedIds = new Set();
     const barSnapshots = new WeakMap();
 
     function isSupportedPage() {
@@ -266,9 +270,12 @@
                 }
                 barSnapshots.set(card, { clone: native.cloneNode(true), original: native, heights });
             }
-            if (!isFullyWatched(card)) return;
-            fullyWatched.push(card);
             const id = getVideoId(card);
+            // A card whose bar is hidden right now (hover preview) still counts
+            // as watched if we detected it earlier on this page.
+            if (!isFullyWatched(card) && !(id && watchedIds.has(id))) return;
+            if (id) watchedIds.add(id);
+            fullyWatched.push(card);
             if (!id) return;
             if (!byVideoId.has(id)) byVideoId.set(id, []);
             byVideoId.get(id).push(card);
@@ -355,6 +362,8 @@
             ));
         duplicateEntries = [];
         duplicateIndex = -1;
+        watchedIds = new Set();
+        document.querySelectorAll('.userscript-native-bar-restore').forEach((el) => el.remove());
     }
 
     function handlePageChange() {
