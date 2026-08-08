@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      17.0
+// @version      17.2
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries on YouTube History and Playlists.
@@ -18,11 +18,15 @@
         'ytd-grid-video-renderer', 'ytd-compact-video-renderer',
         'ytd-playlist-video-renderer', 'yt-lockup-view-model'
     ].join(',');
-    const PROGRESS_SELECTOR = [
+    const NATIVE_PROGRESS_SELECTOR = [
         'yt-thumbnail-overlay-progress-bar-view-model .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment',
-        'ytd-thumbnail-overlay-resume-playback-renderer #progress',
-        '.ytp-thumb-bar > i'
+        'ytd-thumbnail-overlay-resume-playback-renderer #progress'
     ].join(',');
+    // The custom tracker bar sets .done (cyan) only when the video actually
+    // reached its end. Reading the bar's width instead is unreliable: older
+    // tracker builds rounded 99.95% up to a 100% wide bar. When our tracker
+    // has data for a video, it wins over YouTube's native bars.
+    const CUSTOM_BAR_SELECTOR = '.ytp-thumb-bar';
 
     const css = `
         .userscript-watched-dimmed { opacity:.45!important; transition:opacity .2s ease!important; }
@@ -117,7 +121,14 @@
     }
 
     function isFullyWatched(card) {
-        return Array.from(card.querySelectorAll(PROGRESS_SELECTOR)).some((segment) => {
+        // When our tracker has data for this video, it is the source of truth:
+        // done (cyan) means fully watched, anything else means not, regardless
+        // of what YouTube's native bars say.
+        const customBar = card.querySelector(CUSTOM_BAR_SELECTOR);
+        if (customBar) return customBar.classList.contains('done');
+        // No tracker data: fall back to YouTube's native bars, only trusting a
+        // segment that is actually full.
+        return Array.from(card.querySelectorAll(NATIVE_PROGRESS_SELECTOR)).some((segment) => {
             const percent = readPercent(segment);
             return percent !== null && percent >= 99.99;
         });
