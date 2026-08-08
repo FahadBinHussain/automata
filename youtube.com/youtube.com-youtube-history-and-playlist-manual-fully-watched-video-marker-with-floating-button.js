@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      17.2
+// @version      17.8
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries on YouTube History and Playlists.
@@ -36,6 +36,23 @@
         .userscript-watched-dimmed ytd-thumbnail-overlay-resume-playback-renderer,
         .userscript-watched-dimmed ytd-thumbnail-overlay-resume-playback-renderer * {
             opacity:1!important; filter:none!important;
+        }
+        /* YouTube hides the native watched bar on hover (re-render + height
+           collapse). The width % is inline on the inner elements, so only
+           visibility is forced here; the JS hover watcher restores each
+           element's real recorded height, keeping YouTube's natural look
+           (thin bar when partially watched, full overlay when 100% watched). */
+        html ytd-thumbnail:hover yt-thumbnail-overlay-progress-bar-view-model,
+        html yt-thumbnail-view-model:hover yt-thumbnail-overlay-progress-bar-view-model,
+        html ytd-thumbnail:hover ytd-thumbnail-overlay-resume-playback-renderer,
+        html ytd-thumbnail:hover ytd-thumbnail-overlay-resume-playback-renderer #progress,
+        html ytd-thumbnail:hover #progress.ytd-thumbnail-overlay-resume-playback-renderer,
+        html ytd-thumbnail:hover .ytThumbnailOverlayProgressBarHostWatchedProgressBar,
+        html yt-thumbnail-view-model:hover .ytThumbnailOverlayProgressBarHostWatchedProgressBar,
+        html ytd-thumbnail:hover .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment,
+        html yt-thumbnail-view-model:hover .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment {
+            display:block!important; visibility:visible!important; opacity:1!important;
+            z-index:10000!important; pointer-events:none!important;
         }
         .userscript-duplicate-watched {
             opacity:1!important; outline:4px solid #ffb300!important;
@@ -78,6 +95,9 @@
     let duplicateIndex = -1;
     let scanTimer = 0;
     let feedbackTimer = 0;
+    let hoveredCard = null;
+    let hoverRestoreTimer = 0;
+    const barSnapshots = new WeakMap();
 
     function isSupportedPage() {
         const path = location.pathname.replace(/\/+$/, '');
@@ -134,6 +154,69 @@
         });
     }
 
+    // YouTube hides the native watched bar on hover (height:0 on the legacy
+    // resume-playback renderer, and the new progress-bar-view-model host gets
+    // re-rendered away too). CSS alone can't win against their inline rules,
+    // so on hover we force inline styles back onto the bar and re-inject a
+    // clone if YouTube removed the element entirely.
+    const BAR_FORCE = [
+        'yt-thumbnail-overlay-progress-bar-view-model',
+        'ytd-thumbnail-overlay-resume-playback-renderer',
+        '#progress.ytd-thumbnail-overlay-resume-playback-renderer'
+    ].join(',');
+
+    function forceNativeBar(card) {
+        const snap = barSnapshots.get(card);
+        card.querySelectorAll(BAR_FORCE).forEach((el) => {
+            el.style.setProperty('display', 'block', 'important');
+            el.style.setProperty('visibility', 'visible', 'important');
+            el.style.setProperty('opacity', '1', 'important');
+            // Restore the real height captured before hover. YouTube collapses
+            // these to 0 on hover; forcing 2px distorted fully-watched videos
+            // (their official overlay is the whole thumbnail height).
+            const h = snap && snap.heights && snap.heights.get(el);
+            if (h) el.style.setProperty('height', h + 'px', 'important');
+            el.style.setProperty('z-index', '10000', 'important');
+            el.style.setProperty('pointer-events', 'none', 'important');
+        });
+        card.querySelectorAll('.ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment').forEach((el) => {
+            el.style.setProperty('display', 'block', 'important');
+            el.style.setProperty('visibility', 'visible', 'important');
+            el.style.setProperty('opacity', '1', 'important');
+            const h = snap && snap.heights && snap.heights.get(el);
+            if (h) el.style.setProperty('height', h + 'px', 'important');
+        });
+        if (card.querySelector(BAR_FORCE)) return;
+        // Element was removed from the DOM: re-inject a clone from the last
+        // snapshot so the bar keeps showing during hover.
+        const host = card.querySelector('ytd-thumbnail, yt-thumbnail-view-model, #thumbnail');
+        if (!snap || !host || host.querySelector(':scope > .userscript-native-bar-restore')) return;
+        const clone = snap.clone.cloneNode(true);
+        clone.classList.add('userscript-native-bar-restore');
+        Object.assign(clone.style, {
+            position: 'absolute', left: '0', right: '0', bottom: '0',
+            zIndex: '10000', pointerEvents: 'none'
+        });
+        const h = snap.heights && snap.heights.get(snap.original);
+        if (h) clone.style.setProperty('height', h + 'px', 'important');
+        host.style.position = host.style.position === 'static' ? 'relative' : host.style.position;
+        host.appendChild(clone);
+    }
+
+    function onCardEnter(card) {
+        hoveredCard = card;
+        clearTimeout(hoverRestoreTimer);
+        hoverRestoreTimer = setTimeout(() => {
+            if (hoveredCard && hoveredCard.isConnected) forceNativeBar(hoveredCard);
+        }, 80);
+    }
+
+    function onCardLeave() {
+        hoveredCard = null;
+        clearTimeout(hoverRestoreTimer);
+        document.querySelectorAll('.userscript-native-bar-restore').forEach((el) => el.remove());
+    }
+
     function updateNavigation() {
         const nav = document.getElementById('yt-duplicate-nav');
         const status = document.getElementById('yt-duplicate-nav-status');
@@ -169,6 +252,20 @@
         const byVideoId = new Map();
 
         document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+            const native = card.querySelector(NATIVE_PROGRESS_SELECTOR);
+            if (native) {
+                const heights = new Map();
+                card.querySelectorAll(BAR_FORCE + ', .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment')
+                    .forEach((el) => {
+                        const h = el.getBoundingClientRect().height;
+                        if (h > 0) heights.set(el, h);
+                    });
+                if (!heights.has(native)) {
+                    const h = native.getBoundingClientRect().height;
+                    if (h > 0) heights.set(native, h);
+                }
+                barSnapshots.set(card, { clone: native.cloneNode(true), original: native, heights });
+            }
             if (!isFullyWatched(card)) return;
             fullyWatched.push(card);
             const id = getVideoId(card);
@@ -270,12 +367,22 @@
         if (mutations.some((mutation) =>
             mutation.type === 'childList' ||
             mutation.attributeName === 'style' ||
-            mutation.attributeName === 'aria-valuenow'
-        )) scheduleScan();
+            mutation.attributeName === 'aria-valuenow' ||
+            mutation.attributeName === 'class'
+        )) {
+            // YouTube tracks hover with the ytSpecTouchFeedbackShapeHovered
+            // class on the touch-feedback layer; drive the bar force off that
+            // instead of mouse events, which lag or fire on the wrong targets.
+            const shape = document.querySelector('.ytSpecTouchFeedbackShapeHovered');
+            const card = shape ? shape.closest(CARD_SELECTOR) : null;
+            if (card && card !== hoveredCard) onCardEnter(card);
+            else if (!card && hoveredCard) onCardLeave();
+            scheduleScan();
+        }
     });
     observer.observe(document.documentElement, {
         childList:true, subtree:true, attributes:true,
-        attributeFilter:['style', 'aria-valuenow']
+        attributeFilter:['style', 'aria-valuenow', 'class']
     });
 
     handlePageChange();

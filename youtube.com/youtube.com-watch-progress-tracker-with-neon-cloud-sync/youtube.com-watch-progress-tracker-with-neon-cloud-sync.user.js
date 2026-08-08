@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.2
+// @version      0.5.3
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -376,9 +376,16 @@ html.ytp-fs #ytp-btn,html.ytp-fs #ytp-panel{display:none!important}
 #ytp-dot.ok{background:#2ecc71}
 #ytp-dot.fail{background:#e74c3c}
 @keyframes ytp-spin{0%{opacity:.25}50%{opacity:1}100%{opacity:.25}}
-.ytp-thumb-bar{position:absolute;left:0;right:0;bottom:8px;height:4px;background:#0009;z-index:2;pointer-events:none}
+.ytp-thumb-bar{position:absolute;left:0;right:0;bottom:8px;height:4px;background:#0009;z-index:10;pointer-events:none}
 .ytp-thumb-bar i{display:block;height:100%;background:#0f0;transition:width .2s}
-.ytp-thumb-bar.done i{background:#0ff}`;
+.ytp-thumb-bar.done i{background:#0ff}
+ytd-thumbnail:hover .ytp-thumb-bar,
+ytd-video-renderer:hover .ytp-thumb-bar,
+ytd-rich-grid-media:hover .ytp-thumb-bar,
+yt-lockup-view-model:hover .ytp-thumb-bar,
+a:hover > .ytp-thumb-bar,
+#thumbnail:hover .ytp-thumb-bar,
+yt-image:hover .ytp-thumb-bar{display:block!important;opacity:1!important;visibility:visible!important;z-index:10000!important}`;
 
 	const style = document.createElement("style");
 	style.textContent = css;
