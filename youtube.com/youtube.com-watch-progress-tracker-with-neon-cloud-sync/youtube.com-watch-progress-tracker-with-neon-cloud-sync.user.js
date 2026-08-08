@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.0
+// @version      0.5.2
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -33,7 +33,9 @@
 
 	const TICK_MS = 5000;
 	const FLUSH_MS = 120000;
-	const FINISH_PCT = 0.9;
+	// seconds of tolerance: only a position within half a second of the end
+	// counts as fully watched, so "done" (cyan) means actually finished
+	const FINISH_TOL = 0.5;
 	const K_CONN = "neonConnStr";
 	const K_CACHE = "progressCache";
 	const NO_CONN_MSG = "no neon connection string - fill it in settings first";
@@ -44,6 +46,17 @@
 	const saveDirty = () => GM_setValue(K_DIRTY, JSON.stringify([...dirty]));
 	let bound = null;
 	let lastWrite = 0;
+
+	// Re-derive `finished` from position/duration on load: older builds flagged
+	// videos as done at 90% watched, so a stale cache would keep painting cyan
+	// on entries that never reached the end until they were re-watched.
+	for (const id of Object.keys(cache)) {
+		const e = cache[id];
+		if (e && e.duration && !(e.position >= e.duration - FINISH_TOL)) {
+			e.finished = false;
+			dirty.add(id);
+		}
+	}
 
 	const connStr = () => GM_getValue(K_CONN, "").trim();
 	const saveCache = () => GM_setValue(K_CACHE, JSON.stringify(cache));
@@ -176,7 +189,10 @@ on conflict (video_id) do update set
 					...base,
 					position: base.position || 0,
 					duration: remote.duration || local.duration || 0,
-					finished: !!local.finished || !!remote.finished,
+					// Re-derive instead of trusting stored flags: rows written by
+					// older builds flagged `finished` at 90% watched, which painted
+					// cyan on videos that were still seconds from the end.
+					finished: base.position >= (remote.duration || local.duration || 0) - FINISH_TOL,
 					// Keep the newer timestamp. Spreading `base` inherited updatedAt from
 					// whichever row had the higher position, which could be the older one,
 					// and that stale value then decided the list order.
@@ -258,14 +274,16 @@ on conflict (video_id) do update set
 		// Position is last-write-wins: whatever you were last at is the resume
 		// point, even if you seeked backwards. This used to take max(prev, current),
 		// which meant rewinding then leaving the page kept the furthest-forward time.
-		// `finished` stays sticky so a fully watched video remains marked watched.
+		// `finished` is derived, not sticky: only a position at the very end of the
+		// video counts, so rewinding after the credits clears the "done" mark.
 		const sameVideo = prev && Math.abs((prev.duration || 0) - v.duration) < 1;
+		const atEnd = v.ended || v.currentTime >= v.duration - FINISH_TOL;
 		cache[id] = {
 			title: m.title,
 			channel: m.channel,
 			position: v.currentTime,
 			duration: v.duration,
-			finished: (sameVideo && prev.finished) || pct >= FINISH_PCT,
+			finished: atEnd,
 			updatedAt: new Date().toISOString(),
 		};
 		dirty.add(id);
@@ -683,7 +701,7 @@ on conflict (key) do update set
 			return;
 		}
 		for (const [id, e] of rows) {
-			const pct = Math.min(100, Math.round((e.position / e.duration) * 100)) || 0;
+			const pct = Math.min(100, Math.floor((e.position / e.duration) * 100)) || 0;
 			body.append(
 				el(
 					"div",
@@ -873,7 +891,7 @@ on conflict (key) do update set
 		// Show the real position even on a finished video. Forcing 100% here meant a
 		// rewound video kept painting a full bar and hid where you actually left off.
 		// `finished` is only the fallback for entries with no usable duration.
-		const rawPct = Math.round((e.position / e.duration) * 100);
+		const rawPct = Math.floor((e.position / e.duration) * 100);
 		const pct = Number.isFinite(rawPct)
 			? Math.min(100, Math.max(0, rawPct))
 			: e.finished
