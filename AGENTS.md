@@ -32,3 +32,10 @@ rules:
 - `tools` -> allowed as cross-service shared helpers (see rule above)
 
 When the project is a single-file userscript, always copy the complete userscript to the clipboard after every update.
+
+## youtube neon sync userscript gotchas (youtube.com/youtube.com-watch-progress-tracker-with-neon-cloud-sync)
+
+- flush() must never abort the loop on the first failing row - one persistently failing row (rate limit, bad content) starved every row behind it forever. each row gets its own attempt per pass; only failing rows stay in the dirty queue.
+- never sweep the whole cache into the dirty set at sync time - a 200-row re-upload every 5s of watching trips neon's rate limit and causes the failures above. only actual dirty rows get pushed.
+- pagehide/beforeunload must record(true) AND flush() - the debounced push never fires when the tab dies, so the final position is lost until the next visit.
+- sync status lives in the floating panel + console (autoSync logs reason); connection string is a Neon role scoped to `watch_progress` only, never the owner role.
