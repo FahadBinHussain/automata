@@ -30,3 +30,5 @@ rules:
 - `murmur` -> no public hostname (private app); keep as-is until a canonical domain is decided
 - `theoldllm` -> should be the service's domain once confirmed
 - `tools` -> allowed as cross-service shared helpers (see rule above)
+
+When the project is a single-file userscript, always copy the complete userscript to the clipboard after every update.

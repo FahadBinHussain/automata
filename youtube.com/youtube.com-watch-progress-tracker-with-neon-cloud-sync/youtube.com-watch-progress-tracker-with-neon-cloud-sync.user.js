@@ -360,7 +360,7 @@ html.ytp-fs #ytp-btn,html.ytp-fs #ytp-panel{display:none!important}
 @keyframes ytp-spin{0%{opacity:.25}50%{opacity:1}100%{opacity:.25}}
 .ytp-thumb-bar{position:absolute;left:0;right:0;bottom:8px;height:4px;background:#0009;z-index:2;pointer-events:none}
 .ytp-thumb-bar i{display:block;height:100%;background:#0f0;transition:width .2s}
-.ytp-thumb-bar.done i{background:#0f0}`;
+.ytp-thumb-bar.done i{background:#0ff}`;
 
 	const style = document.createElement("style");
 	style.textContent = css;

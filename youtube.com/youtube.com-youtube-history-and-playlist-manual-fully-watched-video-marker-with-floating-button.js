@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      16.1
+// @version      17.0
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
-// @description  Click button to mark fully watched videos in gray on History and Playlists using modern YouTube selectors.
+// @description  Mark fully watched videos and highlight duplicate 100%-watched entries on YouTube History and Playlists.
 // @author       Fahad
 // @match        https://www.youtube.com/*
 // @grant        GM_addStyle
@@ -13,155 +13,261 @@
 (function() {
     'use strict';
 
-    // 1. CSS: Dim watched videos without removing them from the page
+    const CARD_SELECTOR = [
+        'ytd-video-renderer', 'ytd-rich-item-renderer', 'ytd-rich-grid-media',
+        'ytd-grid-video-renderer', 'ytd-compact-video-renderer',
+        'ytd-playlist-video-renderer', 'yt-lockup-view-model'
+    ].join(',');
+    const PROGRESS_SELECTOR = [
+        'yt-thumbnail-overlay-progress-bar-view-model .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment',
+        'ytd-thumbnail-overlay-resume-playback-renderer #progress',
+        '.ytp-thumb-bar > i'
+    ].join(',');
+
     const css = `
-        /* Gray-out watched videos instead of hiding (safer UX) */
-        .userscript-watched-dimmed {
-            opacity: 0.45 !important;
-            transition: opacity 0.2s ease !important;
-        }
-        .userscript-watched-dimmed:hover {
-            opacity: 0.75 !important;
-        }
-        /* Keep watched progress bar fully visible even when card is dimmed */
+        .userscript-watched-dimmed { opacity:.45!important; transition:opacity .2s ease!important; }
+        .userscript-watched-dimmed:hover { opacity:.75!important; }
         .userscript-watched-dimmed yt-thumbnail-overlay-progress-bar-view-model,
         .userscript-watched-dimmed yt-thumbnail-overlay-progress-bar-view-model *,
         .userscript-watched-dimmed ytd-thumbnail-overlay-resume-playback-renderer,
         .userscript-watched-dimmed ytd-thumbnail-overlay-resume-playback-renderer * {
-            opacity: 1 !important;
-            filter: none !important;
+            opacity:1!important; filter:none!important;
         }
-
-        /* The Manual Trigger Button */
+        .userscript-duplicate-watched {
+            opacity:1!important; outline:4px solid #ffb300!important;
+            outline-offset:3px!important; border-radius:6px!important;
+            background:rgba(255,179,0,.12)!important;
+        }
+        .userscript-duplicate-watched::before {
+            content:'DUPLICATE · 100% WATCHED'; display:inline-block; position:relative;
+            z-index:2; margin:4px; padding:4px 8px; border-radius:3px;
+            background:#ffb300; color:#111; font:700 11px/1.2 Roboto,Arial,sans-serif;
+        }
+        .userscript-duplicate-current {
+            outline-color:#00e5ff!important; box-shadow:0 0 0 6px rgba(0,229,255,.3)!important;
+        }
         #yt-manual-filter-btn {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            z-index: 99999;
-            padding: 15px 20px;
-            background-color: #cc0000;
-            color: white;
-            font-family: Roboto, Arial, sans-serif;
-            font-size: 14px;
-            font-weight: bold;
-            text-transform: uppercase;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-            transition: background 0.2s;
+            position:fixed; right:30px; bottom:30px; z-index:99999; padding:15px 20px;
+            border:0; border-radius:4px; background:#c00; color:#fff;
+            box-shadow:0 4px 10px rgba(0,0,0,.5); cursor:pointer;
+            font:700 14px Roboto,Arial,sans-serif; text-transform:uppercase;
         }
-        #yt-manual-filter-btn:hover { background-color: #aa0000; }
-        #yt-manual-filter-btn:active { transform: translateY(2px); }
+        #yt-manual-filter-btn:hover { background:#a00; }
+        #yt-duplicate-nav {
+            position:fixed; right:30px; bottom:92px; z-index:99999; display:none;
+            align-items:center; gap:6px; padding:8px; border:1px solid #555;
+            border-radius:6px; background:rgba(20,20,20,.96); color:#fff;
+            box-shadow:0 4px 12px rgba(0,0,0,.5); font:500 12px Roboto,Arial,sans-serif;
+        }
+        #yt-duplicate-nav button {
+            min-width:34px; padding:6px 9px; border:0; border-radius:3px;
+            background:#3f3f3f; color:#fff; cursor:pointer; font-weight:700;
+        }
+        #yt-duplicate-nav button:hover { background:#606060; }
+        #yt-duplicate-nav-status { min-width:92px; text-align:center; }
     `;
-
-    // Inject CSS
     const style = document.createElement('style');
     style.textContent = css;
-    document.head.append(style);
+    (document.head || document.documentElement).append(style);
 
-    // 2. The marker logic (runs ONLY when clicked)
-    function runFilterOnce() {
-        console.log(">>> Running Filter on ALL loaded videos... <<<");
+    let duplicateEntries = [];
+    let duplicateIndex = -1;
+    let scanTimer = 0;
+    let feedbackTimer = 0;
 
-        // Primary strategy: detect watched-progress segments directly (new YouTube DOM).
-        const watchedSegments = document.querySelectorAll(
-            'yt-thumbnail-overlay-progress-bar-view-model .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment,' +
-            'ytd-thumbnail-overlay-resume-playback-renderer #progress'
-        );
-
-        if (watchedSegments.length === 0) {
-            alert("No videos found. Make sure you are on the History page and videos are loaded.");
-            return;
-        }
-
-        let markedCount = 0;
-        const touched = new Set();
-
-        watchedSegments.forEach((seg) => {
-            const styleWidth = seg.style && seg.style.width ? seg.style.width : '';
-            const match = styleWidth.match(/(\d+(?:\.\d+)?)%/);
-            if (!match) return;
-            const progressPercent = parseFloat(match[1]);
-
-            // Only mark truly complete items. Near-complete bars should stay unmarked.
-            if (progressPercent < 100) return;
-
-            const container = seg.closest(
-                'ytd-video-renderer, ytd-rich-item-renderer, ytd-rich-grid-media, ytd-grid-video-renderer, ' +
-                'ytd-compact-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
-            );
-            if (!container) return;
-
-            if (!touched.has(container)) {
-                touched.add(container);
-                container.classList.add('userscript-watched-dimmed');
-                markedCount++;
-            }
-        });
-
-        // If a card is no longer fully watched on rerun, restore normal style.
-        document.querySelectorAll('.userscript-watched-dimmed').forEach((el) => {
-            if (!touched.has(el)) {
-                el.classList.remove('userscript-watched-dimmed');
-            }
-        });
-
-        console.log(`Filter Complete. Marked watched: ${markedCount} / Segments checked: ${watchedSegments.length}`);
-
-        // Update button text briefly to show success
-        const btn = document.getElementById('yt-manual-filter-btn');
-        if (btn) {
-            const originalText = btn.innerText;
-            btn.innerText = `MARKED ${markedCount}`;
-            setTimeout(() => { btn.innerText = originalText; }, 2000);
-        }
-    }
-
-    // 3. Create the Button
-    function createButton() {
-        if (document.getElementById('yt-manual-filter-btn')) return;
-
-        const btn = document.createElement('button');
-        btn.id = 'yt-manual-filter-btn';
-        btn.innerText = "MARK WATCHED";
-        btn.onclick = runFilterOnce;
-
-        console.debug("NeverSeen: Adding manual filter button.");
-
-        document.body.appendChild(btn);
-    }
-
-    // Helper: Only keep the button on the History or Playlist pages
     function isSupportedPage() {
-        // Use pathname to avoid query params. Handles leading/trailing slashes.
-        const path = window.location.pathname.replace(/\/+$/, '');
+        const path = location.pathname.replace(/\/+$/, '');
         return path === '/feed/history' || path === '/playlist';
     }
 
-    // Remove the button if it exists
-    function removeButton() {
-        const btn = document.getElementById('yt-manual-filter-btn');
-        if (btn) btn.remove();
-        console.debug("NeverSeen: Removed manual filter button.");
+    function getVideoId(card) {
+        for (const link of card.querySelectorAll('a[href*="/watch"],a[href*="youtu.be/"]')) {
+            try {
+                const url = new URL(link.href, location.origin);
+                const id = url.hostname === 'youtu.be'
+                    ? url.pathname.split('/').filter(Boolean)[0]
+                    : url.searchParams.get('v');
+                if (id) return id;
+            } catch (_) {}
+        }
+        return null;
     }
 
-    // Add button after a slight delay to ensure page init, but only on supported pages (History or Playlist)
-    function maybeCreateButton() {
-        if (isSupportedPage()) {
-            setTimeout(createButton, 1500);
+    function readPercent(segment) {
+        const candidates = [
+            segment.style && segment.style.width,
+            segment.getAttribute('aria-valuenow'),
+            segment.getAttribute('data-progress'),
+            segment.getAttribute('data-percent')
+        ];
+        for (const value of candidates) {
+            const match = String(value || '').match(/(\d+(?:\.\d+)?)\s*%?/);
+            if (match && Number.isFinite(Number(match[1]))) return Number(match[1]);
+        }
+        const transform = (segment.getAttribute('style') || '')
+            .match(/scaleX\(\s*(\d+(?:\.\d+)?)\s*\)/i);
+        if (transform) return Number(transform[1]) * 100;
+        const parent = segment.parentElement;
+        if (parent) {
+            const width = segment.getBoundingClientRect().width;
+            const parentWidth = parent.getBoundingClientRect().width;
+            if (width > 0 && parentWidth > 0) return width / parentWidth * 100;
+        }
+        return null;
+    }
+
+    function isFullyWatched(card) {
+        return Array.from(card.querySelectorAll(PROGRESS_SELECTOR)).some((segment) => {
+            const percent = readPercent(segment);
+            return percent !== null && percent >= 99.99;
+        });
+    }
+
+    function updateNavigation() {
+        const nav = document.getElementById('yt-duplicate-nav');
+        const status = document.getElementById('yt-duplicate-nav-status');
+        if (!nav || !status) return;
+        nav.style.display = duplicateEntries.length ? 'flex' : 'none';
+        if (!duplicateEntries.length) {
+            duplicateIndex = -1;
+            status.textContent = 'No duplicates';
         } else {
-            removeButton();
+            if (duplicateIndex >= duplicateEntries.length) duplicateIndex = 0;
+            status.textContent = duplicateIndex < 0
+                ? `${duplicateEntries.length} duplicates`
+                : `${duplicateIndex + 1} / ${duplicateEntries.length}`;
         }
     }
 
-    // Initial run
-    maybeCreateButton();
+    function goToDuplicate(direction) {
+        if (!duplicateEntries.length) return;
+        document.querySelectorAll('.userscript-duplicate-current')
+            .forEach((entry) => entry.classList.remove('userscript-duplicate-current'));
+        duplicateIndex = duplicateIndex < 0
+            ? (direction > 0 ? 0 : duplicateEntries.length - 1)
+            : (duplicateIndex + direction + duplicateEntries.length) % duplicateEntries.length;
+        const target = duplicateEntries[duplicateIndex];
+        target.classList.add('userscript-duplicate-current');
+        target.scrollIntoView({ behavior:'smooth', block:'center' });
+        updateNavigation();
+    }
 
-    // YouTube is an SPA; hook into navigation events to add/remove the button dynamically
-    // 'yt-navigate-finish' is fired by YouTube when client-side navigation completes.
-    window.addEventListener('yt-navigate-finish', maybeCreateButton);
-    // Fallbacks for browsers or platforms that may not emit the YouTube custom event
-    window.addEventListener('popstate', maybeCreateButton);
+    function runFilterOnce(showFeedback = true) {
+        if (!isSupportedPage()) return;
+        const fullyWatched = [];
+        const byVideoId = new Map();
 
+        document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+            if (!isFullyWatched(card)) return;
+            fullyWatched.push(card);
+            const id = getVideoId(card);
+            if (!id) return;
+            if (!byVideoId.has(id)) byVideoId.set(id, []);
+            byVideoId.get(id).push(card);
+        });
+
+        const watchedSet = new Set(fullyWatched);
+        document.querySelectorAll('.userscript-watched-dimmed').forEach((card) => {
+            if (!watchedSet.has(card)) card.classList.remove('userscript-watched-dimmed');
+        });
+        fullyWatched.forEach((card) => card.classList.add('userscript-watched-dimmed'));
+
+        const duplicates = [];
+        byVideoId.forEach((entries) => { if (entries.length > 1) duplicates.push(...entries); });
+        const duplicateSet = new Set(duplicates);
+        document.querySelectorAll('.userscript-duplicate-watched').forEach((card) => {
+            if (!duplicateSet.has(card)) {
+                card.classList.remove('userscript-duplicate-watched', 'userscript-duplicate-current');
+            }
+        });
+        duplicates.forEach((card) => card.classList.add('userscript-duplicate-watched'));
+        duplicateEntries = duplicates.filter((card) => card.isConnected);
+        if (!duplicateEntries.includes(document.querySelector('.userscript-duplicate-current'))) {
+            duplicateIndex = -1;
+        }
+        updateNavigation();
+
+        console.log(`Filter complete. Fully watched: ${fullyWatched.length}; duplicate entries: ${duplicateEntries.length}.`);
+        if (showFeedback) {
+            const button = document.getElementById('yt-manual-filter-btn');
+            if (button) {
+                clearTimeout(feedbackTimer);
+                button.textContent = `WATCHED ${fullyWatched.length} · DUPES ${duplicateEntries.length}`;
+                feedbackTimer = setTimeout(() => { button.textContent = 'MARK WATCHED'; }, 2500);
+            }
+        }
+    }
+
+    function scheduleScan() {
+        if (!isSupportedPage()) return;
+        clearTimeout(scanTimer);
+        scanTimer = setTimeout(() => runFilterOnce(false), 350);
+    }
+
+    function createInterface() {
+        if (!isSupportedPage() || !document.body) return;
+        if (!document.getElementById('yt-manual-filter-btn')) {
+            const button = document.createElement('button');
+            button.id = 'yt-manual-filter-btn';
+            button.type = 'button';
+            button.textContent = 'MARK WATCHED';
+            button.addEventListener('click', () => runFilterOnce(true));
+            document.body.appendChild(button);
+        }
+        if (!document.getElementById('yt-duplicate-nav')) {
+            const nav = document.createElement('div');
+            nav.id = 'yt-duplicate-nav';
+            nav.setAttribute('role', 'navigation');
+            nav.setAttribute('aria-label', 'Duplicate watched video navigation');
+            const previous = document.createElement('button');
+            previous.type = 'button';
+            previous.textContent = '◀';
+            previous.title = 'Previous duplicate';
+            previous.addEventListener('click', () => goToDuplicate(-1));
+            const status = document.createElement('span');
+            status.id = 'yt-duplicate-nav-status';
+            const next = document.createElement('button');
+            next.type = 'button';
+            next.textContent = '▶';
+            next.title = 'Next duplicate';
+            next.addEventListener('click', () => goToDuplicate(1));
+            nav.append(previous, status, next);
+            document.body.appendChild(nav);
+        }
+        scheduleScan();
+    }
+
+    function removeInterface() {
+        clearTimeout(scanTimer);
+        document.getElementById('yt-manual-filter-btn')?.remove();
+        document.getElementById('yt-duplicate-nav')?.remove();
+        document.querySelectorAll('.userscript-watched-dimmed,.userscript-duplicate-watched,.userscript-duplicate-current')
+            .forEach((card) => card.classList.remove(
+                'userscript-watched-dimmed', 'userscript-duplicate-watched', 'userscript-duplicate-current'
+            ));
+        duplicateEntries = [];
+        duplicateIndex = -1;
+    }
+
+    function handlePageChange() {
+        if (isSupportedPage()) setTimeout(createInterface, 500);
+        else removeInterface();
+    }
+
+    const observer = new MutationObserver((mutations) => {
+        if (!isSupportedPage()) return;
+        if (mutations.some((mutation) =>
+            mutation.type === 'childList' ||
+            mutation.attributeName === 'style' ||
+            mutation.attributeName === 'aria-valuenow'
+        )) scheduleScan();
+    });
+    observer.observe(document.documentElement, {
+        childList:true, subtree:true, attributes:true,
+        attributeFilter:['style', 'aria-valuenow']
+    });
+
+    handlePageChange();
+    window.addEventListener('yt-navigate-finish', handlePageChange);
+    window.addEventListener('popstate', handlePageChange);
 })();
