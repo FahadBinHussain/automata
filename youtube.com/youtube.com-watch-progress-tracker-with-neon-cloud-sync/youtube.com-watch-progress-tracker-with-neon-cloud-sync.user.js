@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.6
+// @version      0.5.11
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -35,9 +35,42 @@
 	const FLUSH_MS = 120000;
 	// seconds of tolerance: only a position within half a second of the end
 	// counts as fully watched, so "done" (cyan) means actually finished
-	// 1s slack because a paused seek-to-the-end clamps a fraction under the
-	// true duration and would otherwise never count as done
-	const FINISH_TOL = 1;
+	// ~6s slack: youtube clamps the last few seconds of a video off the
+	// seekable range, so a seek to the very end lands short of `duration`
+	// (e.g. 2:36:07 of 2:36:12) and must still count as finished
+	const FINISH_TOL = 6;
+
+	// The real playable end, not the metadata duration: youtube's seekable
+	// range stops a couple seconds before `duration`, and `duration` itself
+	// can be NaN/infinity before load and on live content.
+	function seekEnd(v) {
+		const s = v.seekable;
+		const end = s && s.length ? s.end(s.length - 1) : v.duration;
+		return end && Number.isFinite(end) && end > 0 ? end : v.duration;
+	}
+
+	// "1:02:07" (or "0:42") -> seconds, matching what the player actually
+	// shows - the video element's own getters are the unreliable part here.
+	function clockToSecs(t) {
+		if (!t) return NaN;
+		const p = String(t).trim().split(":").map(Number);
+		if (!p.length || p.some((n) => Number.isNaN(n))) return NaN;
+		return p.reduce((a, b) => a * 60 + b, 0);
+	}
+
+	// The player flips the whole container into ended-mode when the video is
+	// truly done, and its own clock reads cur == dur then. Both are what the
+	// user actually sees, so use them as the finished signal - the element's
+	// currentTime can clamp short of duration and never fire `ended` on a
+	// paused seek. No tolerance here: 1s left is still green.
+	function playerEnded() {
+		if (document.querySelector(".html5-video-player.ended-mode")) return true;
+		const c = document.querySelector(".ytp-time-current");
+		const d = document.querySelector(".ytp-time-duration");
+		const cur = c ? clockToSecs(c.textContent) : NaN;
+		const dur = d ? clockToSecs(d.textContent) : NaN;
+		return Number.isFinite(dur) && dur > 0 && Number.isFinite(cur) && cur >= dur;
+	}
 	const K_CONN = "neonConnStr";
 	const K_CACHE = "progressCache";
 	const NO_CONN_MSG = "no neon connection string - fill it in settings first";
@@ -52,9 +85,11 @@
 	// Re-derive `finished` from position/duration on load: older builds flagged
 	// videos as done at 90% watched, so a stale cache would keep painting cyan
 	// on entries that never reached the end until they were re-watched.
+	// Strict: only a pinned end position survives - a video with 1s left is
+	// green, not done.
 	for (const id of Object.keys(cache)) {
 		const e = cache[id];
-		if (e && e.duration && !(e.position >= e.duration - FINISH_TOL)) {
+		if (e && e.duration && !(e.position >= e.duration - 0.5)) {
 			e.finished = false;
 			dirty.add(id);
 		}
@@ -191,10 +226,13 @@ on conflict (video_id) do update set
 					...base,
 					position: base.position || 0,
 					duration: remote.duration || local.duration || 0,
-					// Re-derive instead of trusting stored flags: rows written by
-					// older builds flagged `finished` at 90% watched, which painted
-					// cyan on videos that were still seconds from the end.
-					finished: base.position >= (remote.duration || local.duration || 0) - FINISH_TOL,
+// Re-derive instead of trusting stored flags: rows written by
+				// older builds flagged `finished` at 90% watched, which painted
+				// cyan on videos that were still seconds from the end. Only a
+				// pinned end position (record() stores position == duration
+				// when the player actually ended) counts as done.
+				finished:
+					base.position >= (remote.duration || local.duration || 0) - 0.5,
 					// Keep the newer timestamp. Spreading `base` inherited updatedAt from
 					// whichever row had the higher position, which could be the older one,
 					// and that stale value then decided the list order.
@@ -279,11 +317,19 @@ on conflict (video_id) do update set
 		// `finished` is derived, not sticky: only a position at the very end of the
 		// video counts, so rewinding after the credits clears the "done" mark.
 		const sameVideo = prev && Math.abs((prev.duration || 0) - v.duration) < 1;
-		const atEnd = v.ended || v.currentTime >= v.duration - FINISH_TOL;
+		// Finished means the player itself says the video ended: `ended` on the
+		// element, or the player's own UI (ended-mode / clock at duration).
+		// Position-based tolerance was wrong - a video with 1s left must stay
+		// green, not flip to done.
+		const atEnd = v.ended || playerEnded();
+		// A finished video pins its position to the full duration even though
+		// the seek barely landed under it: otherwise the panel/launcher keeps
+		// showing the clamped landing spot (2:33:18 of 2:33:20) and the
+		// load-time re-derivation in `init` would un-finish it.
 		cache[id] = {
 			title: m.title,
 			channel: m.channel,
-			position: v.currentTime,
+			position: atEnd ? v.duration : v.currentTime,
 			duration: v.duration,
 			finished: atEnd,
 			updatedAt: new Date().toISOString(),
@@ -317,12 +363,29 @@ on conflict (video_id) do update set
 		// a drag-to-the-end used to sit there unfinished forever. Catch the
 		// seeked landing instead and count it as finished.
 		v.addEventListener("seeked", () => {
-			if (v.currentTime >= v.duration - FINISH_TOL) {
+			if (v.currentTime >= seekEnd(v) - FINISH_TOL) {
 				record(true);
 				flush();
 			}
 		});
 	}
+
+	// The ended-mode clock is the source of truth, but there is no event for
+	// "user sat on the end screen for a minute" - seeked fired once already
+	// and nothing re-writes after that. Poll gently while a player exists
+	// and re-record if the player itself reports the video as finished. The
+	// cheap cache comparison stops redundant writes once it's already done.
+	let lastEndMark = null;
+	setInterval(() => {
+		const id = videoId();
+		if (!bound || !id || !playerEnded()) return;
+		const e = cache[id];
+		if (e && e.finished && lastEndMark === id) return;
+		if (e && e.duration && Math.abs(e.duration - (bound.duration || e.duration)) > 1) return;
+		lastEndMark = id;
+		record(true);
+		flush();
+	}, 2000);
 
 	document.addEventListener("yt-navigate-finish", () => {
 		bound = null;
@@ -729,7 +792,10 @@ on conflict (key) do update set
 			return;
 		}
 		for (const [id, e] of rows) {
-			const pct = Math.min(100, Math.floor((e.position / e.duration) * 100)) || 0;
+			// Finished entries report 100%: their stored position can sit a
+			// fraction under duration (the seek clamp), which would floor to
+			// 99% while the row is already marked done.
+			const pct = e.finished ? 100 : Math.min(100, Math.floor((e.position / e.duration) * 100)) || 0;
 			body.append(
 				el(
 					"div",
@@ -913,11 +979,13 @@ on conflict (key) do update set
 		// Show the real position even on a finished video. Forcing 100% here meant a
 		// rewound video kept painting a full bar and hid where you actually left off.
 		// `finished` is only the fallback for entries with no usable duration.
+		// A finished entry stored at duration - FINISH_TOL (the seekable clamp)
+		// floors to 99%, but it IS done - so let the cyan state own the full bar.
 		const rawPct = Math.floor((e.position / e.duration) * 100);
-		const pct = Number.isFinite(rawPct)
-			? Math.min(100, Math.max(0, rawPct))
-			: e.finished
-				? 100
+		const pct = e.finished
+			? 100
+			: Number.isFinite(rawPct)
+				? Math.min(100, Math.max(0, rawPct))
 				: 0;
 		if (!bar) {
 			bar = el("div", { class: "ytp-thumb-bar" }, el("i"));
