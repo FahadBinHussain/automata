@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.11
+// @version      0.5.12
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -153,13 +153,13 @@ on conflict (video_id) do update set
   updated_at = greatest(watch_progress.updated_at, coalesce($7::timestamptz, now()))`;
 
 	async function flush() {
-		if (!connStr() || dirty.size === 0) return;
+		if (!connStr() || dirty.size === 0) return 0;
 		const ids = [...dirty];
+		let ok = 0;
 		for (const id of ids) {
 			const e = cache[id];
 			if (!e) {
 				dirty.delete(id);
-				saveDirty();
 				continue;
 			}
 			try {
@@ -176,13 +176,19 @@ on conflict (video_id) do update set
 					e.updatedAt || null,
 				]);
 				dirty.delete(id);
-				saveDirty();
+				ok++;
 			} catch (err) {
-				console.warn("[yt-progress] flush failed", err);
-				return; // keep dirty, retry next tick
+				// One failing row must not abort the queue: `return` used to stop
+				// the loop on the first error, so every row behind it stayed
+				// unsynced - and when the same row kept failing (rate limit, bad
+				// title) the rows behind it were starved forever. Every row gets
+				// its own attempt on every pass; only the failing ones stay dirty.
+				console.warn("[yt-progress] flush failed for " + id, err);
 			}
 		}
+		saveDirty();
 		renderList();
+		return ok;
 	}
 
 	// Neon's HTTP API is not consistent about how it serializes booleans, so a
@@ -250,7 +256,9 @@ on conflict (video_id) do update set
 
 	let syncing = false;
 	const PUSH_DEBOUNCE_MS = 5000;
+	const RETRY_MS = 30000;
 	let pushTimer = null;
+	let retryTimer = null;
 
 	function schedulePush() {
 		if (!connStr()) return;
@@ -264,14 +272,21 @@ on conflict (video_id) do update set
 		syncState("busy");
 		try {
 			record(true);
-			for (const id of Object.keys(cache)) dirty.add(id);
-			saveDirty();
+			// Only the pending dirt rows go up. Sweeping the whole cache into the
+			// queue each time turned every 5s debounce into a re-upload of all
+			// videos, which tripped neon's rate limit and made flushes fail.
 			const pushing = dirty.size;
-			await flush();
-			if (dirty.size) throw new Error(`${dirty.size} of ${pushing} rows failed to upload`);
+			const ok = await flush();
+			if (dirty.size) {
+				clearTimeout(retryTimer);
+				retryTimer = setTimeout(() => autoSync("retry"), RETRY_MS);
+				throw new Error(
+					`${dirty.size} of ${pushing} rows failed to upload (${ok} ok), retrying in ${RETRY_MS / 1000}s`
+				);
+			}
 			const pulled = await pull();
 			syncState("ok");
-			status(`synced - pushed ${pushing}, ${pulled} rows in neon`);
+			status(`synced - pushed ${ok}, ${pulled} rows in neon`);
 		} catch (e) {
 			syncState("fail");
 			status(`sync failed - ${e.message}`);
@@ -391,7 +406,10 @@ on conflict (video_id) do update set
 		bound = null;
 		setTimeout(bind, 800);
 	});
-	window.addEventListener("beforeunload", () => record(true));
+	window.addEventListener("beforeunload", () => {
+		record(true);
+		flush();
+	});
 	setInterval(bind, 2000);
 	setInterval(() => autoSync("tick"), FLUSH_MS);
 	document.addEventListener("visibilitychange", () => {
@@ -404,6 +422,9 @@ on conflict (video_id) do update set
 	window.addEventListener("pagehide", () => {
 		clearTimeout(pushTimer);
 		record(true);
+		// The tab is going away; the debounced push may never fire, so push the
+		// final position now instead of waiting for the next tick/visit.
+		flush();
 	});
 
 	// --- ui ---------------------------------------------------------------
