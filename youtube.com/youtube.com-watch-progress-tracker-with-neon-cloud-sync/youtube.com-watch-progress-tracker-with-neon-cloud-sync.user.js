@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.0
+// @version      0.4.1
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -819,14 +819,12 @@ on conflict (key) do update set
 						n.tagName === "A" &&
 						(n.getAttribute?.("href") || "").includes("/watch?v="),
 				) || ev.target?.closest?.("a[href*='/watch?v=']");
-			if (!a) return;
+			if (!a || !a.dataset.ytpT) return;
 			const href = a.getAttribute("href") || "";
 			const id = idFromHref(href);
-			if (!id) return;
 			const secs = Number(a.dataset.ytpT);
-			if (Number.isFinite(secs)) {
-				GM_setValue(K_SEEK, JSON.stringify({ id, secs, at: Date.now() }));
-			}
+			if (!id || !Number.isFinite(secs)) return;
+			GM_setValue(K_SEEK, JSON.stringify({ id, secs, at: Date.now() }));
 			// Let the browser handle modified clicks (new tab, new window, download)
 			// normally - those already do a real load and honour the href's t=.
 			if (
