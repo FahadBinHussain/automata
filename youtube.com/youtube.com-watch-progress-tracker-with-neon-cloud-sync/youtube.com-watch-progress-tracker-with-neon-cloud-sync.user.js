@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.14
+// @version      0.5.15
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -352,7 +352,7 @@ on conflict (video_id) do update set
 		};
 	}
 
-	function record(force, why) {
+	function record(force, why, atSeekEnd) {
 		const v = bound;
 		const id = videoId();
 		if (!v || !id || !v.duration || Number.isNaN(v.duration)) return;
@@ -382,7 +382,7 @@ on conflict (video_id) do update set
 		// element, or the player's own UI (ended-mode / clock at duration).
 		// Position-based tolerance was wrong - a video with 1s left must stay
 		// green, not flip to done.
-		const atEnd = v.ended || playerEnded();
+		const atEnd = v.ended || playerEnded() || atSeekEnd;
 		// A finished entry must survive teardown noise. The last write before the
 		// page goes away (pagehide/beforeunload, autoplay swapping the next video
 		// into this element, a final clamped timeupdate) often lands a hair under
@@ -442,10 +442,13 @@ on conflict (video_id) do update set
 		// Seeking straight to the end never fires `ended` (it only fires while
 		// playing), and the player clamps the seek a hair under duration - so
 		// a drag-to-the-end used to sit there unfinished forever. Catch the
-		// seeked landing instead and count it as finished.
+		// seeked landing: it only counts as finished when it lands at the
+		// seekable end itself (the clamp means that IS the true end), not when
+		// it lands seconds early - a seek to 4s before the end stays green.
 		v.addEventListener("seeked", () => {
-			if (v.currentTime >= seekEnd(v) - FINISH_TOL) {
-				record(true, "seeked");
+			const end = seekEnd(v);
+			if (v.currentTime >= end - FINISH_TOL) {
+				record(true, "seeked", v.currentTime >= end - 0.5);
 				flush();
 			}
 		});
