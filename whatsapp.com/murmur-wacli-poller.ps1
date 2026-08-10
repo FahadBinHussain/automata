@@ -8,7 +8,7 @@ $StatePath = "$env:TEMP\murmur-poller-state.json"
 $TokenPath = "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt"
 $HfToken = (Get-Content $TokenPath -Raw).Trim()
 $MurmurWebhook = "https://<murmur-space>/wacli/webhook"
-$WebhookSecret = "MURMUR_WEBHOOK_SECRET"
+$WebhookSecret = $env:MURMUR_WEBHOOK_SECRET
 
 function Load-State {
     if (Test-Path $StatePath) {
