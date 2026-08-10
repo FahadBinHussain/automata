@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.13
+// @version      0.5.14
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -82,6 +82,19 @@
 	let bound = null;
 	let lastWrite = 0;
 
+	// Persistent ring-buffer event log. Every state-changing decision (record,
+	// flush, merge, load re-derivation, seek) writes a line here so a progress
+	// revert can be traced to the exact event that caused it instead of
+	// guessing. Survives reloads; visible in the panel's Log tab and console.
+	const K_LOG = "progressLog";
+	let logBuf = JSON.parse(GM_getValue(K_LOG, "[]"));
+	function log(...parts) {
+		logBuf.push({ t: Date.now(), msg: parts.join(" ") });
+		if (logBuf.length > 500) logBuf = logBuf.slice(-500);
+		GM_setValue(K_LOG, JSON.stringify(logBuf));
+		console.log("[yt-progress]", parts.join(" "));
+	}
+
 	// Re-derive `finished` from position/duration on load: older builds flagged
 	// videos as done at 90% watched, so a stale cache would keep painting cyan
 	// on entries that never reached the end until they were re-watched.
@@ -92,6 +105,9 @@
 		if (e && e.duration && !(e.position >= e.duration - 0.5)) {
 			e.finished = false;
 			dirty.add(id);
+			log(
+				`loadfix v=${id} finished cleared (p=${Math.round(e.position)} d=${Math.round(e.duration)})`
+			);
 		}
 	}
 
@@ -156,6 +172,7 @@ on conflict (video_id) do update set
 		if (!connStr() || dirty.size === 0) return 0;
 		const ids = [...dirty];
 		let ok = 0;
+		let fail = 0;
 		for (const id of ids) {
 			const e = cache[id];
 			if (!e) {
@@ -183,11 +200,16 @@ on conflict (video_id) do update set
 				// unsynced - and when the same row kept failing (rate limit, bad
 				// title) the rows behind it were starved forever. Every row gets
 				// its own attempt on every pass; only the failing ones stay dirty.
+				fail++;
+				log(
+					`flush fail v=${id} (p=${Math.round(e.position)} d=${Math.round(e.duration)} fin=${e.finished}): ${String(err && err.message).slice(0, 120)}`
+				);
 				console.warn("[yt-progress] flush failed for " + id, err);
 			}
 		}
 		saveDirty();
 		renderList();
+		if (ids.length) log(`flush ok=${ok} fail=${fail} left=${dirty.size}`);
 		return ok;
 	}
 
@@ -223,13 +245,17 @@ on conflict (video_id) do update set
 			// that were fully watched.
 			if (!local) {
 				cache[id] = remote;
+				if (remote.finished)
+					log(
+						`adopt v=${id} finished row from neon (p=${Math.round(remote.position)} d=${Math.round(remote.duration)})`
+					);
 			} else {
 				// Pick the more recently written row, not the further-along one. Position
 				// is last-write-wins now, so a rewind has to be able to win over a higher
 				// position recorded earlier.
 				const base = ts(local.updatedAt) >= ts(remote.updatedAt) ? local : remote;
 				const dur = remote.duration || local.duration || 0;
-				cache[id] = {
+				const merged = {
 					...base,
 					position: base.position || 0,
 					duration: dur,
@@ -250,6 +276,16 @@ on conflict (video_id) do update set
 							? local.updatedAt
 							: remote.updatedAt,
 				};
+				if (
+					Math.abs((merged.position || 0) - (local.position || 0)) > 0.5 ||
+					merged.finished !== local.finished ||
+					merged.duration !== (local.duration || 0)
+				) {
+					log(
+						`merge v=${id} p ${Math.round(local.position || 0)}->${Math.round(merged.position)} d ${Math.round(local.duration || 0)}->${Math.round(merged.duration)} fin ${local.finished}->${merged.finished} base=${base === local ? "local" : "remote"}`
+					);
+				}
+				cache[id] = merged;
 			}
 		}
 		saveCache();
@@ -274,7 +310,7 @@ on conflict (video_id) do update set
 		syncing = true;
 		syncState("busy");
 		try {
-			record(true);
+			record(true, "autosync");
 			// Only the pending dirt rows go up. Sweeping the whole cache into the
 			// queue each time turned every 5s debounce into a re-upload of all
 			// videos, which tripped neon's rate limit and made flushes fail.
@@ -290,9 +326,11 @@ on conflict (video_id) do update set
 			const pulled = await pull();
 			syncState("ok");
 			status(`synced - pushed ${ok}, ${pulled} rows in neon`);
+			log(`autosync ${reason}: pushed ${ok}, pulled ${pulled} rows`);
 		} catch (e) {
 			syncState("fail");
 			status(`sync failed - ${e.message}`);
+			log(`autosync ${reason} failed: ${String(e.message).slice(0, 200)}`);
 			console.warn(`[yt-progress] autoSync(${reason}) failed`, e);
 		} finally {
 			syncing = false;
@@ -314,7 +352,7 @@ on conflict (video_id) do update set
 		};
 	}
 
-	function record(force) {
+	function record(force, why) {
 		const v = bound;
 		const id = videoId();
 		if (!v || !id || !v.duration || Number.isNaN(v.duration)) return;
@@ -328,7 +366,12 @@ on conflict (video_id) do update set
 		// is the player being torn down, or autoplay loading the next video into the
 		// same <video> element before location.href catches up. Writing that would
 		// clobber a finished entry down to 0, so drop it and keep what we had.
-		if (v.currentTime < 1 && prev && prev.position > 5) return;
+		if (v.currentTime < 1 && prev && prev.position > 5) {
+			log(
+				`record skip v=${id} ct=${v.currentTime.toFixed(2)} (teardown guard, kept p=${Math.round(prev.position)} fin=${prev.finished}) why=${why || "?"}`
+			);
+			return;
+		}
 		// Position is last-write-wins: whatever you were last at is the resume
 		// point, even if you seeked backwards. This used to take max(prev, current),
 		// which meant rewinding then leaving the page kept the furthest-forward time.
@@ -354,10 +397,16 @@ on conflict (video_id) do update set
 		// showing the clamped landing spot (2:33:18 of 2:33:20) and the
 		// load-time re-derivation in `init` would un-finish it.
 		const finished = atEnd || wasDoneAtEnd;
+		const pos = finished ? v.duration : v.currentTime;
+		const changed =
+			!prev ||
+			Math.abs((prev.position || 0) - pos) > 0.5 ||
+			prev.duration !== v.duration ||
+			prev.finished !== finished;
 		cache[id] = {
 			title: m.title,
 			channel: m.channel,
-			position: finished ? v.duration : v.currentTime,
+			position: pos,
 			duration: v.duration,
 			finished: finished,
 			updatedAt: new Date().toISOString(),
@@ -365,6 +414,10 @@ on conflict (video_id) do update set
 		dirty.add(id);
 		saveCache();
 		saveDirty();
+		if (changed)
+			log(
+				`record v=${id} p=${Math.round(pos)} d=${Math.round(v.duration)} fin=${finished} why=${why || "?"}${prev ? ` (was p=${Math.round(prev.position)} fin=${prev.finished})` : ""}`
+			);
 		schedulePush();
 	}
 
@@ -372,9 +425,9 @@ on conflict (video_id) do update set
 		const v = document.querySelector("video");
 		if (!v || v === bound) return;
 		bound = v;
-		v.addEventListener("timeupdate", () => record(false));
+		v.addEventListener("timeupdate", () => record(false, "tick"));
 		v.addEventListener("pause", () => {
-			record(true);
+			record(true, "pause");
 			flush();
 		});
 		// Seeked-to-the-end must still be marked finished: after the video
@@ -383,7 +436,7 @@ on conflict (video_id) do update set
 		// under duration) and pause never fires when autoplay loads the next
 		// video into the same element.
 		v.addEventListener("ended", () => {
-			record(true);
+			record(true, "ended");
 			flush();
 		});
 		// Seeking straight to the end never fires `ended` (it only fires while
@@ -392,7 +445,7 @@ on conflict (video_id) do update set
 		// seeked landing instead and count it as finished.
 		v.addEventListener("seeked", () => {
 			if (v.currentTime >= seekEnd(v) - FINISH_TOL) {
-				record(true);
+				record(true, "seeked");
 				flush();
 			}
 		});
@@ -411,7 +464,7 @@ on conflict (video_id) do update set
 		if (e && e.finished && lastEndMark === id) return;
 		if (e && e.duration && Math.abs(e.duration - (bound.duration || e.duration)) > 1) return;
 		lastEndMark = id;
-		record(true);
+		record(true, "poller");
 		flush();
 	}, 2000);
 
@@ -420,7 +473,7 @@ on conflict (video_id) do update set
 		setTimeout(bind, 800);
 	});
 	window.addEventListener("beforeunload", () => {
-		record(true);
+		record(true, "unload");
 		flush();
 	});
 	setInterval(bind, 2000);
@@ -434,7 +487,7 @@ on conflict (video_id) do update set
 	});
 	window.addEventListener("pagehide", () => {
 		clearTimeout(pushTimer);
-		record(true);
+		record(true, "pagehide");
 		// The tab is going away; the debounced push may never fire, so push the
 		// final position now instead of waiting for the next tick/visit.
 		flush();
@@ -489,6 +542,8 @@ html.ytp-fs #ytp-btn,html.ytp-fs #ytp-panel{display:none!important}
   background:#272727;color:#f1f1f1}
 .ytp-act button.p{background:#f00;color:#fff}
 #ytp-status{margin-top:8px;font-size:11px;color:#aaa;min-height:14px}
+#ytp-log{max-height:280px;overflow:auto;font:10px/1.5 ui-monospace,Consolas,monospace;color:#9ec;white-space:pre-wrap;word-break:break-all;margin-top:6px;background:#0008;padding:6px;border-radius:4px}
+#ytp-log .t{color:#667;margin-right:6px}
 #ytp-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:#555;transition:background .2s}
 #ytp-dot.busy{background:#3ea6ff;animation:ytp-spin .8s linear infinite}
 #ytp-dot.ok{background:#2ecc71}
@@ -571,9 +626,20 @@ yt-image:hover .ytp-thumb-bar{display:block!important;opacity:1!important;visibi
 			"div",
 			{ id: "ytp-tabs" },
 			el("button", { "data-t": "list", class: "on", text: "Progress" }),
+			el("button", { "data-t": "log", text: "Log" }),
 			el("button", { "data-t": "set", text: "Settings" })
 		),
 		el("div", { class: "ytp-body on", "data-b": "list" }),
+		el(
+			"div",
+			{ class: "ytp-body", "data-b": "log" },
+			el(
+				"div",
+				{ class: "ytp-act" },
+				el("button", { "data-a": "clearlog", text: "Clear log" })
+			),
+			el("div", { id: "ytp-log" })
+		),
 		el(
 			"div",
 			{ class: "ytp-body", "data-b": "set" },
@@ -739,8 +805,31 @@ on conflict (key) do update set
 			panel.querySelectorAll(".ytp-body").forEach((x) => x.classList.remove("on"));
 			b.classList.add("on");
 			panel.querySelector(`[data-b="${b.dataset.t}"]`).classList.add("on");
+			if (b.dataset.t === "log") renderLog();
 		};
 	});
+
+	function renderLog() {
+		const box = panel.querySelector("#ytp-log");
+		if (!box) return;
+		box.replaceChildren(
+			...[...logBuf].reverse().slice(0, 400).map((l) =>
+				el(
+					"div",
+					{},
+					el("span", { class: "t", text: new Date(l.t).toLocaleTimeString() }),
+					el("span", { text: l.msg })
+				)
+			)
+		);
+	}
+
+	panel.querySelector('[data-a="clearlog"]').onclick = () => {
+		logBuf = [];
+		GM_setValue(K_LOG, "[]");
+		renderLog();
+		status("log cleared");
+	};
 
 	$("#ytp-conn").value = connStr();
 
@@ -936,7 +1025,9 @@ on conflict (key) do update set
 		const v = document.querySelector("video");
 		if (!v || !Number.isFinite(v.duration) || !v.duration) return retry();
 		if (Math.abs(v.currentTime - p.secs) > 2) {
+			const before = v.currentTime;
 			v.currentTime = p.secs;
+			log(`seek applied v=${p.id} -> ${Math.round(p.secs)}s (was ${Math.round(before)}s)`);
 			// YouTube applies its own resume slightly after the player becomes ready,
 			// so verify the seek actually stuck rather than assuming one write wins.
 			if (tries < 24) setTimeout(() => applySeek(tries + 1), 400);
