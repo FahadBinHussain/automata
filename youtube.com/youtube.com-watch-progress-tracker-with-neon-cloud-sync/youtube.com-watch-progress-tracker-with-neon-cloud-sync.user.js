@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.12
+// @version      0.5.13
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -228,17 +228,20 @@ on conflict (video_id) do update set
 				// is last-write-wins now, so a rewind has to be able to win over a higher
 				// position recorded earlier.
 				const base = ts(local.updatedAt) >= ts(remote.updatedAt) ? local : remote;
+				const dur = remote.duration || local.duration || 0;
 				cache[id] = {
 					...base,
 					position: base.position || 0,
-					duration: remote.duration || local.duration || 0,
-// Re-derive instead of trusting stored flags: rows written by
-				// older builds flagged `finished` at 90% watched, which painted
-				// cyan on videos that were still seconds from the end. Only a
-				// pinned end position (record() stores position == duration
-				// when the player actually ended) counts as done.
-				finished:
-					base.position >= (remote.duration || local.duration || 0) - 0.5,
+					duration: dur,
+					// Done stays done: a teardown/partial row that is newer must not
+					// un-finish a video the player (or the DB) already marked finished.
+					// Either side's finished flag wins when the position is at or near
+					// the end (clamped seeks land within FINISH_TOL of duration); the
+					// strict end-position check still applies everywhere else, so
+					// legacy rows flagged finished at 90% watched get cleaned up.
+					finished:
+						base.position >= dur - 0.5 ||
+						((remote.finished || local.finished) && base.position >= dur - FINISH_TOL),
 					// Keep the newer timestamp. Spreading `base` inherited updatedAt from
 					// whichever row had the higher position, which could be the older one,
 					// and that stale value then decided the list order.
@@ -337,16 +340,26 @@ on conflict (video_id) do update set
 		// Position-based tolerance was wrong - a video with 1s left must stay
 		// green, not flip to done.
 		const atEnd = v.ended || playerEnded();
+		// A finished entry must survive teardown noise. The last write before the
+		// page goes away (pagehide/beforeunload, autoplay swapping the next video
+		// into this element, a final clamped timeupdate) often lands a hair under
+		// duration with no `ended` signal and no ended-mode - and that used to
+		// clobber `finished` back to false, so the thumbnail went partial on the
+		// next load even though the video was fully watched. Once done, stay done
+		// unless the position genuinely moves away from the end (a real rewind).
+		const wasDoneAtEnd =
+			prev && prev.finished && v.currentTime >= seekEnd(v) - FINISH_TOL;
 		// A finished video pins its position to the full duration even though
 		// the seek barely landed under it: otherwise the panel/launcher keeps
 		// showing the clamped landing spot (2:33:18 of 2:33:20) and the
 		// load-time re-derivation in `init` would un-finish it.
+		const finished = atEnd || wasDoneAtEnd;
 		cache[id] = {
 			title: m.title,
 			channel: m.channel,
-			position: atEnd ? v.duration : v.currentTime,
+			position: finished ? v.duration : v.currentTime,
 			duration: v.duration,
-			finished: atEnd,
+			finished: finished,
 			updatedAt: new Date().toISOString(),
 		};
 		dirty.add(id);
