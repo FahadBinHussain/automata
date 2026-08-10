@@ -35,7 +35,7 @@ function saveState() {
 
 function computeSignature(payload) {
   const crypto = require('crypto');
-  const hmac = crypto.createHmac('sha256', 'MURMUR_WEBHOOK_SECRET').update(payload).digest('hex');
+  const hmac = crypto.createHmac('sha256', process.env.MURMUR_WEBHOOK_SECRET || '').update(payload).digest('hex');
   return 'sha256=' + hmac;
 }
 
