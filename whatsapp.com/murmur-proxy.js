@@ -49,7 +49,7 @@ function markProcessed(msgId) {
 
 function computeSignature(payload) {
   const crypto = require('crypto');
-  const secret = 'MURMUR_WEBHOOK_SECRET';
+  const secret = process.env.MURMUR_WEBHOOK_SECRET || '';
   const hmac = crypto.createHmac('sha256', secret).update(payload).digest('hex');
   return 'sha256=' + hmac;
 }
