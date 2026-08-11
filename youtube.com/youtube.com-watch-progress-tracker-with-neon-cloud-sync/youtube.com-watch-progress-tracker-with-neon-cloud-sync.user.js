@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Progress Tracker (Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.15
+// @version      0.5.16
 // @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -161,7 +161,11 @@ on conflict (video_id) do update set
   -- the resume point earlier. greatest() pinned it to the furthest point reached.
   position   = excluded.position,
   duration   = excluded.duration,
-  finished   = watch_progress.finished or excluded.finished,
+  -- Also last-write-wins: a rewind recorded after a finish clears the done
+  -- mark. The client protects finished rows from teardown writes itself
+  -- (only unload/pagehide writes keep a near-end done entry), so the DB can
+  -- trust excluded.finished instead of or-ing it sticky.
+  finished   = excluded.finished,
   -- Store when the video was actually watched, not when the row happened to
   -- sync. Pushes are debounced and retried, so now() drifted later than
   -- reality and could sort a row above something watched after it. greatest()
@@ -244,30 +248,43 @@ on conflict (video_id) do update set
 			// row had an equal or higher position, which painted 0% bars on videos
 			// that were fully watched.
 			if (!local) {
-				cache[id] = remote;
-				if (remote.finished)
+				// Trust a fresh remote row, but legacy rows flagged finished at 90%
+				// watched (old builds) must not paint done - same near-end rule as
+				// the merge below.
+				const durR = remote.duration || 0;
+				const cleaned = remote.finished && remote.position < durR - FINISH_TOL;
+				cache[id] = {
+					...remote,
+					finished: remote.finished && remote.position >= durR - FINISH_TOL,
+				};
+				if (cleaned) {
+					dirty.add(id);
+					saveDirty();
+				}
+				if (remote.finished) {
 					log(
-						`adopt v=${id} finished row from neon (p=${Math.round(remote.position)} d=${Math.round(remote.duration)})`
+						`adopt v=${id} fin=${cache[id].finished} from neon (p=${Math.round(remote.position)} d=${Math.round(remote.duration)})${cleaned ? " (legacy 90% row cleaned)" : ""}`
 					);
+				}
 			} else {
 				// Pick the more recently written row, not the further-along one. Position
 				// is last-write-wins now, so a rewind has to be able to win over a higher
 				// position recorded earlier.
 				const base = ts(local.updatedAt) >= ts(remote.updatedAt) ? local : remote;
 				const dur = remote.duration || local.duration || 0;
+				// Done is decided by the NEWER row, not an OR of both flags: a rewind
+				// recorded after a finish must be able to clear the done mark (even 1s
+				// left is green). Teardown protection lives in record() - unload/
+				// pagehide writes carry finished=true themselves - so the merge does
+				// not need to resurrect done from the older row. The near-end window
+				// still catches legacy rows flagged finished at 90% watched.
 				const merged = {
 					...base,
 					position: base.position || 0,
 					duration: dur,
-					// Done stays done: a teardown/partial row that is newer must not
-					// un-finish a video the player (or the DB) already marked finished.
-					// Either side's finished flag wins when the position is at or near
-					// the end (clamped seeks land within FINISH_TOL of duration); the
-					// strict end-position check still applies everywhere else, so
-					// legacy rows flagged finished at 90% watched get cleaned up.
 					finished:
 						base.position >= dur - 0.5 ||
-						((remote.finished || local.finished) && base.position >= dur - FINISH_TOL),
+						(base.finished && base.position >= dur - FINISH_TOL),
 					// Keep the newer timestamp. Spreading `base` inherited updatedAt from
 					// whichever row had the higher position, which could be the older one,
 					// and that stale value then decided the list order.
@@ -284,6 +301,12 @@ on conflict (video_id) do update set
 					log(
 						`merge v=${id} p ${Math.round(local.position || 0)}->${Math.round(merged.position)} d ${Math.round(local.duration || 0)}->${Math.round(merged.duration)} fin ${local.finished}->${merged.finished} base=${base === local ? "local" : "remote"}`
 					);
+				}
+				// If the merge corrected a flag that differs from what Neon has, queue
+				// the corrected row for the next flush so the DB converges too.
+				if (merged.finished !== remote.finished) {
+					dirty.add(id);
+					saveDirty();
 				}
 				cache[id] = merged;
 			}
@@ -384,14 +407,18 @@ on conflict (video_id) do update set
 		// green, not flip to done.
 		const atEnd = v.ended || playerEnded() || atSeekEnd;
 		// A finished entry must survive teardown noise. The last write before the
-		// page goes away (pagehide/beforeunload, autoplay swapping the next video
-		// into this element, a final clamped timeupdate) often lands a hair under
+		// page goes away (pagehide/beforeunload) often lands a hair under
 		// duration with no `ended` signal and no ended-mode - and that used to
 		// clobber `finished` back to false, so the thumbnail went partial on the
-		// next load even though the video was fully watched. Once done, stay done
-		// unless the position genuinely moves away from the end (a real rewind).
+		// next load even though the video was fully watched. Only teardown
+		// writes get this protection: a real user rewind (scrub, seeked, pause
+		// during playback) records the position as-is, so even a 1-2s step back
+		// from the end clears the done mark again.
 		const wasDoneAtEnd =
-			prev && prev.finished && v.currentTime >= seekEnd(v) - FINISH_TOL;
+			prev &&
+			prev.finished &&
+			(why === "unload" || why === "pagehide") &&
+			v.currentTime >= seekEnd(v) - FINISH_TOL;
 		// A finished video pins its position to the full duration even though
 		// the seek barely landed under it: otherwise the panel/launcher keeps
 		// showing the clamped landing spot (2:33:18 of 2:33:20) and the
