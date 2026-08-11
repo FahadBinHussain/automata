@@ -6,6 +6,7 @@
 #   .\steam-shortcuts.ps1 list                      # show current shortcuts
 #   .\steam-shortcuts.ps1 add -Name "Game" -Exe "C:\path\game.exe" [-StartDir "C:\path"]
 #   .\steam-shortcuts.ps1 remove -Name "Game"
+#   .\steam-shortcuts.ps1 update -Name "Game" -Exe "C:\new\path\game.exe" [-StartDir "C:\new\path"]
 #   .\steam-shortcuts.ps1 path                      # print shortcuts.vdf path
 #
 # notes:
@@ -14,7 +15,7 @@
 # - renumbering keeps indexes sequential; steam sanitizes extra fields anyway
 
 param(
-    [Parameter(Position = 0)][ValidateSet('list', 'add', 'remove', 'path')][string]$Command = 'list',
+    [Parameter(Position = 0)][ValidateSet('list', 'add', 'remove', 'update', 'path')][string]$Command = 'list',
     [string]$Name,
     [string]$Exe,
     [string]$StartDir,
@@ -214,6 +215,24 @@ foreach ($vdfFile in $shortcutFiles) {
             $entries.Remove($match)
             Write-VdfFile -Path $vdfFile.FullName -Entries $entries
             Write-Host "removed: $Name (backup: $backup)"
+        }
+        'update' {
+            if (-not $Name) { throw 'update requires -Name' }
+            if (-not $Exe -and -not $StartDir) { throw 'update requires -Exe and/or -StartDir' }
+            $match = $entries | Where-Object { $_['AppName'].Value -eq $Name } | Select-Object -First 1
+            if (-not $match) { Write-Host "not found: $Name"; break }
+            if (Get-Process steam -ErrorAction SilentlyContinue) { Write-Warning 'steam is running - close it or it will overwrite shortcuts.vdf on exit!' }
+            $backup = "$($vdfFile.FullName).bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Copy-Item $vdfFile.FullName $backup
+            if ($Exe) {
+                $exeQuoted = if ($Exe -like '"*"') { $Exe } else { "`"$Exe`"" }
+                $match['Exe'].Value = $exeQuoted
+            }
+            if ($StartDir) { $match['StartDir'].Value = $StartDir.Trim('"') }
+            if (-not $StartDir -and $Exe) { $match['StartDir'].Value = "$(Split-Path ($Exe.Trim('"')))" }
+            if (-not $match['StartDir'].Value.EndsWith('\')) { $match['StartDir'].Value += '\' }
+            Write-VdfFile -Path $vdfFile.FullName -Entries $entries
+            Write-Host "updated: $Name -> Exe=$($match['Exe'].Value) StartDir=$($match['StartDir'].Value) (backup: $backup)"
         }
     }
 }
