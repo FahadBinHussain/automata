@@ -23,9 +23,23 @@ create table if not exists ui_prefs (
   updated_at timestamptz not null default now()
 );
 
+-- spotify/soundcloud visited-track history (merged into the same db, formerly
+-- a google apps script backend). id = track uri, name = "artist - song",
+-- updated_at = last time the track was seen.
+create table if not exists visited_tracks (
+  id         text primary key,
+  name       text not null,
+  source     text not null check (source in ('spotify','soundcloud')),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists visited_tracks_updated_at_idx
+  on visited_tracks (updated_at desc);
+
 -- scoped role - use this connection string in the settings tab,
 -- NOT the project owner one.
 --
 --   create role yt_progress with login password 'something-long';
 --   grant select, insert, update on watch_progress to yt_progress;
 --   grant select, insert, update on ui_prefs to yt_progress;
+--   grant select, insert, update on visited_tracks to yt_progress;
