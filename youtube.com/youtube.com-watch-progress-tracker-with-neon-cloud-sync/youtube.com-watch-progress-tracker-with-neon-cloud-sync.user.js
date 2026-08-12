@@ -1,10 +1,13 @@
 // ==UserScript==
-// @name         YouTube Watch Progress Tracker (Neon sync)
+// @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.5.16
-// @description  Tracks how far you are into every YouTube video and syncs progress to a Neon Postgres database. Floating panel with a progress list and a settings tab, plus progress bars painted on video thumbnails.
+// @version      0.6.1
+// @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
+// @match        https://open.spotify.com/*
+// @match        https://soundcloud.com/*
+// @match        https://www.soundcloud.com/*
 // @run-at       document-idle
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -20,16 +23,32 @@
  * reach. Keeping it out of git does not make it safe, it only moves it into
  * your browser.
  *
- * Use a role scoped to this one table, never the project owner role:
+ * Use a role scoped to just the tables it needs, never the project owner role:
  *
  *   create role yt_progress with login password '...';
  *   grant select, insert, update on watch_progress to yt_progress;
+ *   grant select, insert, update on visited_tracks to yt_progress;
  *
  * Then paste the connection string for THAT role, not the owner one.
+ *
+ * This userscript is a merged build: the YouTube progress tracker (previously
+ * a standalone script) plus the Spotify/SoundCloud visited-track tracker,
+ * which used to live on a Google Apps Script backend. Since 0.6.0 the visited
+ * history lives in the same Neon database in the `visited_tracks` table
+ * (columns: id, name, source, updated_at) - the Apps Script backend is gone.
  */
 
 (function () {
 	"use strict";
+
+	const HOST = location.hostname;
+	const IS_YT = HOST === "www.youtube.com" || HOST === "m.youtube.com";
+	const IS_MUSIC = HOST === "open.spotify.com" || HOST === "soundcloud.com" || HOST === "www.soundcloud.com";
+
+	// =====================================================================
+	// shared infra: used by BOTH the youtube tracker and the music tracker.
+	// keep everything above the `if (IS_YT)` gate here.
+	// =====================================================================
 
 	const TICK_MS = 5000;
 	const FLUSH_MS = 120000;
@@ -150,6 +169,11 @@
 			});
 		});
 	}
+
+	// =====================================================================
+	// youtube tracker: everything below only runs on youtube.com.
+	// =====================================================================
+	if (IS_YT) {
 
 	const SQL_UPSERT = `
 insert into watch_progress (video_id, title, channel, position, duration, finished, updated_at)
@@ -884,6 +908,11 @@ on conflict (key) do update set
   x          integer not null,
   y          integer not null,
   updated_at timestamptz not null default now())`);
+			await neonQuery(`create table if not exists visited_tracks (
+  id         text primary key,
+  name       text not null,
+  source     text not null check (source in ('spotify','soundcloud')),
+  updated_at timestamptz not null default now())`);
 			status("tables ready");
 		} catch (e) {
 			status(String(e.message));
@@ -1177,4 +1206,445 @@ on conflict (key) do update set
 			console.warn("[yt-progress] initial pull failed", err);
 		});
 	paintThumbs();
+	} // end if (IS_YT)
+
+	// =====================================================================
+	// music tracker (spotify + soundcloud): visited-track history in Neon.
+	// mirrors the old apps-script backend behaviour, but talks to the same
+	// `visited_tracks` table via neonQuery. no local fallback: the cloud is
+	// the source of truth, same as the youtube side.
+	// =====================================================================
+	if (IS_MUSIC) {
+
+	const VT_TABLE = "visited_tracks";
+	// GM storage keys - must not collide with the youtube tracker's keys.
+	const K_VT_SET = "mVisitedSet";
+	const K_VT_LOG = "mVisitedLog";
+
+	let visitedTracks = new Set();
+	try {
+		const raw = (GM_getValue(K_VT_SET, "") || "").trim();
+		if (raw) visitedTracks = new Set(raw.split("\n").filter(Boolean));
+	} catch {}
+
+	// local mirror of the neon table, for persistence across reloads without
+	// waiting on the first pull. the CLICK state still depends on cloud ack.
+	let vtCache = {};
+	try { vtCache = JSON.parse(GM_getValue("mVisitedCache", "{}")); } catch {}
+
+	let isHistoryLoaded = false;
+	let isCloudDisabled = false;
+	let vtBannerEl = null;
+	let vfetchRetryTimer = null;
+	let vdebounceTimer = null;
+	const VT_BUTTON_CLASS = "vm-yt-search-btn";
+
+	const mlog = (...parts) => {
+		const line = { t: Date.now(), msg: parts.join(" ") };
+		try {
+			const arr = JSON.parse(GM_getValue(K_VT_LOG, "[]"));
+			arr.push(line);
+			GM_setValue(K_VT_LOG, JSON.stringify(arr.slice(-300)));
+		} catch {}
+		console.log("[spotify-yt]", parts.join(" "));
+	};
+
+	function mvShowBanner(message, kind) {
+		const existing = document.getElementById("vm-cloud-banner");
+		if (existing) existing.remove();
+		const banner = document.createElement("div");
+		banner.id = "vm-cloud-banner";
+		const bg = kind === "warn" ? "#f59e0b" : "#dc2626";
+		banner.style.cssText = [
+			"position:fixed", "top:0", "left:0", "right:0",
+			"z-index:2147483647", "padding:10px 14px",
+			"background:" + bg, "color:#fff",
+			"font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+			"white-space:pre-wrap", "word-break:break-word",
+			"text-align:left", "box-shadow:0 2px 8px rgba(0,0,0,0.25)",
+			"pointer-events:auto", "user-select:text",
+			"max-height:40vh", "overflow:auto"
+		].join(";");
+		banner.textContent = message;
+		document.documentElement.appendChild(banner);
+		vtBannerEl = banner;
+	}
+
+	function mvClearBanner() {
+		const existing = document.getElementById("vm-cloud-banner");
+		if (existing) existing.remove();
+		vtBannerEl = null;
+	}
+
+	function mvSetOnline() {
+		isCloudDisabled = false;
+		mvClearBanner();
+	}
+
+	function mvSetOffline(reason) {
+		isCloudDisabled = true;
+		const msg = reason || "unknown error";
+		console.error("[Spotify→YT] cloud sync OFFLINE:", msg);
+		mvShowBanner(
+			"Spotify→YouTube cloud sync OFFLINE: " + msg +
+			" — clicks won't mark tracks visited. Fix the Neon conn string (YT▶ panel settings) or your network.",
+			"error"
+		);
+	}
+
+	function musicSource() {
+		return HOST === "open.spotify.com" ? "spotify" : "soundcloud";
+	}
+
+	const VT_ICON_SVG = `<svg role="img" height="16" width="16" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
+	const VT_VISITED_SVG = `<svg role="img" height="16" width="16" viewBox="0 0 24 24" fill="#E22134"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
+
+	const SC_EXCLUDED = new Set([
+		"charts", "discover", "feed", "for-you", "go", "library", "messages",
+		"notifications", "pages", "premium", "search", "settings", "signin",
+		"stream", "terms", "upload", "you"
+	]);
+
+	function vclean(v) { return (v || "").replace(/\s+/g, " ").trim(); }
+
+	function vbuildYT(artist, song) {
+		return `https://www.youtube.com/results?search_query=${encodeURIComponent(`${artist} ${song}`.trim())}`;
+	}
+
+	function vtrackId(raw) { return String(raw || "").replace(/^\/+/, ""); }
+
+	function mUpdateIcon(btn, trackId) {
+		const visited = isHistoryLoaded && trackId && visitedTracks.has(trackId);
+		if (visited) {
+			btn.innerHTML = VT_VISITED_SVG;
+			btn.title = "Visited (Shift+Click to clear)";
+			btn.style.color = "#E22134";
+		} else {
+			btn.innerHTML = VT_ICON_SVG;
+			btn.title = isCloudDisabled
+				? "Cloud sync offline — click will open YouTube but won't save"
+				: "Search on YouTube";
+			btn.style.color = "#b3b3b3";
+		}
+		const icon = btn.querySelector("svg");
+		if (icon) icon.style.pointerEvents = "none";
+	}
+
+	function mShield(btn) {
+		["pointerdown", "pointerup", "mousedown", "mouseup", "dblclick"].forEach((ev) => {
+			btn.addEventListener(ev, (event) => {
+				event.preventDefault?.();
+				event.stopPropagation();
+				event.stopImmediatePropagation?.();
+			}, true);
+		});
+	}
+
+	function mCreateButton(trackId, songName, artistNameForSave, ytUrl, spacing = {}) {
+		const btn = document.createElement("a");
+		btn.className = VT_BUTTON_CLASS;
+		btn.href = ytUrl;
+		btn.target = "_blank";
+		btn.rel = "noopener noreferrer";
+		btn.dataset.trackId = trackId;
+		btn.setAttribute("aria-label", "Search on YouTube");
+		btn.style.cssText = `
+			display:inline-flex;align-items:center;justify-content:center;background:transparent;
+			border:none;border-radius:50%;cursor:pointer;width:24px;min-width:24px;height:24px;
+			padding:0;margin-left:${spacing.marginLeft || "20px"};margin-right:${spacing.marginRight || "10px"};
+			text-decoration:none;flex-shrink:0;position:relative;z-index:50;pointer-events:auto;
+			user-select:none;vertical-align:middle;color:#b3b3b3`;
+		mUpdateIcon(btn, trackId);
+		mShield(btn);
+		btn.onmouseover = () => { if (!visitedTracks.has(trackId)) btn.style.color = "#fff"; };
+		btn.onmouseout = () => { btn.style.color = visitedTracks.has(trackId) ? "#E22134" : "#b3b3b3"; };
+		btn.onclick = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			e.stopImmediatePropagation?.();
+			if (isCloudDisabled) {
+				window.open(ytUrl, "_blank");
+				return;
+			}
+			if (e.shiftKey) {
+				if (visitedTracks.has(trackId)) {
+					mSave(trackId, `${artistNameForSave} - ${songName}`, "remove")
+						.then(() => {
+							visitedTracks.delete(trackId);
+							mUpdateIcon(btn, trackId);
+							mPersistSet();
+						})
+						.catch(() => {});
+				}
+				return;
+			}
+			mSave(trackId, `${artistNameForSave} - ${songName}`, "add")
+				.then(() => {
+					visitedTracks.add(trackId);
+					vtCache[trackId] = { name: `${artistNameForSave} - ${songName}`, source: musicSource(), updatedAt: new Date().toISOString() };
+					mPersistSet();
+					mPersistCache();
+					mUpdateIcon(btn, trackId);
+				})
+				.catch(() => {});
+			window.open(ytUrl, "_blank");
+		};
+		return btn;
+	}
+
+	function mPersistSet() {
+		try { GM_setValue(K_VT_SET, [...visitedTracks].join("\n")); } catch {}
+	}
+	function mPersistCache() {
+		try { GM_setValue("mVisitedCache", JSON.stringify(vtCache)); } catch {}
+	}
+
+	function mFetchHistory() {
+		if (!connStr()) {
+			mvSetOffline("no neon connection string - set it on YouTube, the YT▶ settings panel is shared");
+			return;
+		}
+		const src = musicSource();
+		neonQuery(`select id, name, updated_at from ${VT_TABLE} where source = $1`, [src])
+			.then((rows) => {
+				visitedTracks = new Set(rows.map((r) => String(r.id).replace(/^\/+/, "")).filter(Boolean));
+				vtCache = {};
+				for (const r of rows) vtCache[String(r.id)] = { name: r.name, source: src, updatedAt: r.updated_at };
+				mPersistSet();
+				mPersistCache();
+				isHistoryLoaded = true;
+				mvSetOnline();
+				mAddAllButtons();
+				mlog(`history loaded: ${visitedTracks.size} ${src} tracks`);
+			})
+			.catch((err) => {
+				mvSetOffline(String(err && err.message).slice(0, 120));
+				mScheduleRetry();
+			});
+	}
+
+	function mScheduleRetry() {
+		if (vfetchRetryTimer) return;
+		let attempt = 0;
+		const tick = () => {
+			vfetchRetryTimer = null;
+			if (isHistoryLoaded) return;
+			attempt++;
+			const delay = Math.min(10000 * Math.pow(2, attempt - 1), 120000);
+			console.warn("[Spotify→YT] retrying fetch, attempt " + attempt + " in " + (delay / 1000) + "s");
+			mFetchHistory();
+			if (!isHistoryLoaded && attempt < 5) vfetchRetryTimer = setTimeout(tick, delay);
+		};
+		vfetchRetryTimer = setTimeout(tick, 10000);
+	}
+
+	function mSave(trackId, songName, action) {
+		return new Promise((resolve, reject) => {
+			if (!connStr()) {
+				mvSetOffline("no neon connection string");
+				reject(new Error("no neon connection string"));
+				return;
+			}
+			const src = musicSource();
+			const q =
+				action === "remove"
+					? `delete from ${VT_TABLE} where id = $1 and source = $2`
+					: `insert into ${VT_TABLE} (id, name, source, updated_at) values ($1, $2, $3, now())
+					   on conflict (id) do update set name = excluded.name, updated_at = now()`;
+			neonQuery(q, action === "remove" ? [trackId, src] : [trackId, songName, src])
+				.then(() => { mvSetOnline(); resolve({ status: "ok" }); })
+				.catch((err) => {
+					mvSetOffline("save failed: " + String(err && err.message).slice(0, 120));
+					reject(err);
+				});
+		});
+	}
+
+	function mFindButton(container, trackId) {
+		return Array.from(container.querySelectorAll(`.${VT_BUTTON_CLASS}`)).find((b) => b.dataset.trackId === trackId);
+	}
+
+	function mGetSource() { return musicSource(); }
+
+	function mAddAllButtons() {
+		if (HOST === "open.spotify.com") { mAddSpotify(); return; }
+		if (HOST === "soundcloud.com" || HOST === "www.soundcloud.com") mAddSoundCloud();
+	}
+
+	function mAddSpotify() {
+		const rows = document.querySelectorAll('div[data-testid="tracklist-row"]');
+		rows.forEach((row) => {
+			const titleColumn = row.querySelector('div[aria-colindex="2"]');
+			if (!titleColumn) return;
+			const textContainer = Array.from(titleColumn.children).find((c) =>
+				c.tagName === "DIV" && !c.classList.contains(VT_BUTTON_CLASS)
+			);
+			if (textContainer && textContainer.style.flex !== "1 1 0%") {
+				textContainer.style.flex = "1";
+				textContainer.style.minWidth = "0";
+			}
+			const titleEl = row.querySelector('a[data-testid="internal-track-link"]');
+			if (!titleEl) return;
+			const href = titleEl.getAttribute("href");
+			const id = href ? vtrackId(href.split("/").pop()) : null;
+			if (!id) return;
+			let btn = row.querySelector(`.${VT_BUTTON_CLASS}`);
+			if (btn) {
+				mUpdateIcon(btn, id);
+				if (titleColumn.lastElementChild !== btn) titleColumn.appendChild(btn);
+				return;
+			}
+			const songName = titleEl.innerText.trim();
+			const artistEls = row.querySelectorAll('a[href^="/artist/"]');
+			let artistList = Array.from(artistEls).map((a) => a.innerText.trim());
+			if (artistList.length === 0) {
+				const pageTitle = document.querySelector('[data-encore-id="adaptiveTitle"]');
+				if (pageTitle) artistList.push(pageTitle.innerText.trim());
+			}
+			const ytUrl = vbuildYT(artistList.join(" "), songName);
+			btn = mCreateButton(id, songName, artistList.join(", "), ytUrl);
+			titleColumn.appendChild(btn);
+			titleColumn.style.display = "flex";
+			titleColumn.style.alignItems = "center";
+		});
+	}
+
+	function mSCUrl(href) {
+		try {
+			const u = new URL(href, location.origin);
+			if (u.hostname !== "soundcloud.com" && u.hostname !== "www.soundcloud.com") return null;
+			return u;
+		} catch { return null; }
+	}
+
+	function mSCPathFromHref(href) {
+		const u = mSCUrl(href);
+		if (!u) return null;
+		const parts = u.pathname.split("/").filter(Boolean);
+		if (parts.length < 2) return null;
+		if (SC_EXCLUDED.has(parts[0])) return null;
+		if (parts.includes("sets")) return null;
+		return `/${parts[0]}/${parts[1]}`;
+	}
+
+	function mSCPathFromAnchor(a) { return mSCPathFromHref(a.getAttribute("href")); }
+
+	function mSCProfileFromAnchor(a) {
+		const u = mSCUrl(a.getAttribute("href"));
+		if (!u) return null;
+		const parts = u.pathname.split("/").filter(Boolean);
+		if (parts.length !== 1) return null;
+		if (SC_EXCLUDED.has(parts[0])) return null;
+		return `/${parts[0]}`;
+	}
+
+	function mSCTitle(a) {
+		const t = vclean(a.getAttribute("title")) || vclean(a.textContent);
+		return t.replace(/^Play\s+/i, "");
+	}
+
+	function mSCArtist(container, trackPath) {
+		const slug = trackPath.split("/").filter(Boolean)[0];
+		const specific = container.querySelector([
+			'a.soundTitle__usernameText[href]', 'a.soundTitle__username[href]',
+			'a.trackItem__username[href]', 'a.compactTrackListItem__user[href]',
+			'a[class*="username"][href]'
+		].join(","));
+		if (specific) { const t = vclean(specific.textContent); if (t) return t; }
+		const prof = Array.from(container.querySelectorAll("a[href]")).find((a) =>
+			mSCProfileFromAnchor(a) === `/${slug}` && vclean(a.textContent)
+		);
+		if (prof) return vclean(prof.textContent);
+		return slug.replace(/[-_]+/g, " ");
+	}
+
+	function mSlugName(slug) { return decodeURIComponent(slug || "").replace(/[-_]+/g, " "); }
+
+	function mMountListBtn(titleLink, buttonElement) {
+		buttonElement.style.marginLeft = "0";
+		buttonElement.style.marginRight = "6px";
+		const parent = titleLink.parentElement;
+		if (parent) parent.style.minWidth = "0";
+		titleLink.style.minWidth = "0";
+		titleLink.style.overflow = "hidden";
+		titleLink.style.textOverflow = "ellipsis";
+		titleLink.style.whiteSpace = "nowrap";
+		if (titleLink.previousElementSibling !== buttonElement) {
+			titleLink.insertAdjacentElement("beforebegin", buttonElement);
+		}
+	}
+
+	function mAddSoundCloud() {
+		mAddSCCurrent();
+		const trackLinks = Array.from(document.querySelectorAll("a[href]")).filter(mSCPathFromAnchor);
+		const containers = new Set();
+		trackLinks.forEach((link) => {
+			const container = link.closest([
+				"li.soundList__item", ".sound", ".trackItem", ".compactTrackListItem",
+				".searchList__item", ".playableTile", ".systemPlaylistTrackList__item",
+				'[data-testid*="track"]'
+			].join(",")) || link.parentElement;
+			if (container) containers.add(container);
+		});
+		containers.forEach((container) => {
+			const titleLink = Array.from(container.querySelectorAll("a[href]")).find(mSCPathFromAnchor);
+			if (!titleLink) return;
+			const trackPath = mSCPathFromAnchor(titleLink);
+			if (!trackPath) return;
+			const trackId = vtrackId(trackPath);
+			const songName = mSCTitle(titleLink);
+			if (!songName) return;
+			const artistName = mSCArtist(container, trackPath);
+			const ytUrl = vbuildYT(artistName, songName);
+			const existing = mFindButton(container, trackId);
+			if (existing) {
+				existing.href = ytUrl;
+				mUpdateIcon(existing, trackId);
+				mMountListBtn(titleLink, existing);
+				return;
+			}
+			const btn = mCreateButton(trackId, songName, artistName, ytUrl, { marginLeft: "8px", marginRight: "4px" });
+			mMountListBtn(titleLink, btn);
+		});
+	}
+
+	function mAddSCCurrent() {
+		const trackPath = mSCPathFromHref(location.href);
+		if (!trackPath) return;
+		const [artistSlug] = trackPath.split("/").filter(Boolean);
+		const titleEl = document.querySelector([
+			"h1.soundTitle__title", '[data-testid="track-title"]', "h1"
+		].join(","));
+		if (!titleEl) return;
+		const songName = vclean(titleEl.textContent) || mSlugName(trackPath.split("/").filter(Boolean)[1] || "");
+		if (!songName) return;
+		const artistAnchor =
+			document.querySelector('a.soundTitle__usernameText[href], a.soundTitle__username[href]') ||
+			Array.from(document.querySelectorAll("a[href]")).find((a) => mSCProfileFromAnchor(a) === `/${artistSlug}`);
+		const artistName = vclean(artistAnchor ? artistAnchor.textContent : "") || mSlugName(artistSlug);
+		const trackId = vtrackId(trackPath);
+		const ytUrl = vbuildYT(artistName, songName);
+		const mount = titleEl.parentElement || document.body;
+		const existing = mFindButton(mount, trackId);
+		if (existing) {
+			existing.href = ytUrl;
+			mUpdateIcon(existing, trackId);
+			return;
+		}
+		const btn = mCreateButton(trackId, songName, artistName, ytUrl, { marginLeft: "10px", marginRight: "0" });
+		if (titleEl) {
+			titleEl.style.display = "inline-flex";
+			titleEl.style.alignItems = "center";
+			titleEl.insertAdjacentElement("afterend", btn);
+		}
+	}
+
+	mFetchHistory();
+
+	new MutationObserver(() => {
+		if (vdebounceTimer) clearTimeout(vdebounceTimer);
+		vdebounceTimer = setTimeout(mAddAllButtons, 300);
+	}).observe(document.body, { childList: true, subtree: true });
+
+	} // end if (IS_MUSIC)
 })();
