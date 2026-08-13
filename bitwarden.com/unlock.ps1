@@ -1,5 +1,20 @@
 # Bitwarden unlock helper
-# Launches outer shell for password input, saves session to %APPDATA%\mainframe\accounts\bitwarden\session.key
+# Spawns unlock-inner.ps1 in its own window for interactive password entry,
+# saves session to %APPDATA%\mainframe\accounts\bitwarden\session.key
+# Master password is entered manually every time (no stored copy on disk).
+#
+# Handles all CLI states:
+#   - locked          -> bw unlock (password)
+#   - unauthenticated -> bw login (password) first, then capture session
+#   - unlocked        -> reuse existing session
+#
+# NOTE: never run `bw sync` in the unlock window - if the stored session
+# tokens are stale, sync's token refresh triggers a CLI logout that
+# overwrites the state file (symptom: data.json shrinks to ~13KB with
+# global_clearEvent_logout, status flips locked -> unauthenticated).
+# The vault cache is already on disk; agents sync themselves after
+# validating BW_SESSION.
+#
 # Usage: .\unlock.ps1
 
 $sessionDir = "$env:APPDATA\mainframe\accounts\bitwarden"
@@ -13,7 +28,9 @@ if (!(Test-Path $sessionDir)) {
 try {
     $status = bw status 2>&1 | ConvertFrom-Json
     if ($status.status -eq "unlocked") {
-        if ($env:BW_SESSION) {
+        $currentSession = $null
+        if (Test-Path $sessionFile) { $currentSession = Get-Content $sessionFile -Raw }
+        if (-not $currentSession -and $env:BW_SESSION) {
             Set-Content -Path $sessionFile -Value $env:BW_SESSION -NoNewline
         }
         if (Test-Path $sessionFile) {
@@ -23,42 +40,16 @@ try {
     }
 } catch {}
 
-# Launch outer shell for interactive password entry
-$scriptBlock = {
-    $sessionDir = "$env:APPDATA\mainframe\accounts\bitwarden"
-    $sessionFile = "$sessionDir\session.key"
-
-    Write-Host ""
-    Write-Host "=== Bitwarden Unlock ===" -ForegroundColor Cyan
-    Write-Host ""
-
-    $securePassword = Read-Host "Enter master password" -AsSecureString
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-    $plainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
-
-    $env:BW_PASSWORD = $plainPassword
-    $result = bw unlock --passwordenv BW_PASSWORD --raw 2>&1
-
-    if ($LASTEXITCODE -eq 0 -and $result -match "^[A-Za-z0-9+/=]+$") {
-        Set-Content -Path $sessionFile -Value $result -NoNewline
-        $env:BW_SESSION = $result
-        bw sync | Out-Null
-        Write-Host ""
-        Write-Host "Unlocked and synced." -ForegroundColor Green
-    } else {
-        Write-Host ""
-        Write-Host "Unlock failed." -ForegroundColor Red
-    }
-
-    Start-Sleep -Seconds 2
+$innerPath = Join-Path $PSScriptRoot 'unlock-inner.ps1'
+if (-not (Test-Path $innerPath)) {
+    Write-Host "Missing unlock-inner.ps1 next to unlock.ps1" -ForegroundColor Red
+    exit 1
 }
 
-$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptBlock.ToString()))
-Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded"
+Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$innerPath`""
 
-# Wait for session file (up to 60s)
-$timeout = 60
+# Wait for session file (up to 180s - inner worker allows 3 password attempts)
+$timeout = 180
 $elapsed = 0
 Write-Host "Waiting for unlock..." -NoNewline
 while (!(Test-Path $sessionFile) -and $elapsed -lt $timeout) {
