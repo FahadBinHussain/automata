@@ -33,6 +33,11 @@ rules:
 
 When the project is a single-file userscript, always copy the complete userscript to the clipboard after every update.
 
+## bitwarden.com unlock gotchas (bitwarden.com/unlock-inner.ps1)
+
+- **stale-key unlock failure** (2026-08-13): if `bw unlock --passwordenv BW_PASSWORD --raw` exits 1 with `bitwarden_crypto::keys::master_key: error=The decryption operation failed ... The provided key is not the expected type`, the stored encrypted keys in data.json don't match the typed master password - the master password changed on the server (<vault-url> for this profile) after the local state was saved. `bw status` still reports `locked`, so the old flow silently retried 3x and looked stuck. unlock-inner now detects the error text, prints it, and runs a one-time `bw logout` + `bw login <email> --passwordenv` heal to rebuild local keys from the server (vault is server-side, nothing lost; 2FA prompt appears in the unlock window if enabled). first attempt after a server-side password change: expect the heal message, NOT a session.
+- unlock is the master-password entrypoint; the mainframe bitwarden-account.ps1 (rule 7) handles profile data.json swapping - after the heal's login, the next helper `run` saves the fresh state back into the profile dir.
+
 ## youtube neon sync userscript gotchas (youtube.com/youtube.com-watch-progress-tracker-with-neon-cloud-sync)
 
 - flush() must never abort the loop on the first failing row - one persistently failing row (rate limit, bad content) starved every row behind it forever. each row gets its own attempt per pass; only failing rows stay in the dirty queue.
