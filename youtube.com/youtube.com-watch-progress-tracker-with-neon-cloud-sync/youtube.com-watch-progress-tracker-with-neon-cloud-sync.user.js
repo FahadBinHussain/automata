@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.6.1
+// @version      0.6.2
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1030,6 +1030,7 @@ on conflict (key) do update set
 
 	function retime(a, id, e) {
 		const secs = Math.round(e.position);
+		const dur = e.duration || 0;
 		// Our timestamp must win over YouTube's own resume link. A t= exactly at
 		// the very end drops you on the end card, so cap it 2s short of duration
 		// instead of removing our stamp: since ended videos now record position ==
@@ -1037,8 +1038,21 @@ on conflict (key) do update set
 		// Keying this off `finished` instead of the actual position was also wrong:
 		// `finished` is sticky and never clears, so once a video was completed its
 		// link stayed plain forever - even after rewinding to the middle.
-		const dur = e.duration || 0;
-		if (secs < 1 || !(dur > 0)) return;
+		if (secs < 1 || !(dur > 0)) {
+			// Our progress for this video is 0: never override - let YouTube's
+			// own resume position play. Also remove any stamp we added earlier,
+			// or a rewind back to 0 would keep a stale t= on the link and a
+			// pendingSeek on the next click.
+			if (a.dataset.ytpT) {
+				delete a.dataset.ytpT;
+				try {
+					const u = new URL(a.getAttribute("href"), location.origin);
+					u.searchParams.delete("t");
+					a.setAttribute("href", u.pathname + u.search);
+				} catch {}
+			}
+			return;
+		}
 		const t = Math.min(secs, Math.max(1, dur - 2));
 		if (a.dataset.ytpT === String(t)) return;
 		try {
@@ -1076,6 +1090,16 @@ on conflict (key) do update set
 		tries = tries || 0;
 		const p = takeSeek();
 		if (!p) return;
+		// Our progress for this video is 0: don't inject our timestamp, let
+		// YouTube's own resume position play. Covers a stale pendingSeek left
+		// over from an earlier click (rewound to 0 after the click, or the
+		// entry never had real progress).
+		const eNow = cache[p.id];
+		if (eNow && Math.round(eNow.position || 0) < 1) {
+			GM_setValue(K_SEEK, "null");
+			log(`seek dropped v=${p.id} (progress 0 - using youtube's resume)`);
+			return;
+		}
 		const retry = () => {
 			if (tries < 24) setTimeout(() => applySeek(tries + 1), 250);
 		};
