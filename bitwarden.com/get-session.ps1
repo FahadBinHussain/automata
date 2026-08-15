@@ -2,6 +2,9 @@
 # Returns session key if valid, exits 1 if expired/missing
 # Usage: $session = .\get-session.ps1
 
+# force UTF-8 stdout - bw status parsing must not go through the OEM codepage
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $sessionFile = "$env:APPDATA\mainframe\accounts\bitwarden\session.key"
 
 if (!(Test-Path $sessionFile)) {
