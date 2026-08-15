@@ -7,6 +7,11 @@ param(
     [string]$Search
 )
 
+# force UTF-8 stdout so bw's non-ASCII output (Bengali, emoji, curly quotes)
+# is not mis-decoded through the console's OEM codepage (ibm437) - a misread
+# here shows up as ΓÇÖ/αªª-style mojibake and can corrupt data on write-back.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $sessionFile = "$env:APPDATA\mainframe\accounts\bitwarden\session.key"
 if (Test-Path $sessionFile) {
     $env:BW_SESSION = Get-Content $sessionFile -Raw
