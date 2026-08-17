@@ -2,6 +2,10 @@
 
 home of reusable qBittorrent scripts (headless add/status via the Web API).
 
+## pick rules
+
+- **always 1080p minimum** (user rule, 2026-08-17): never add a 720p torrent; pick the best-seeded 1080p, else 2160p. `yts.lt\search.ps1` enforces this by default (`-Allow720` to relax).
+
 ## scripts
 
 - `add-torrent.ps1` - add a magnet URI or .torrent URL and start it (optionally `-Paused`). ensures qBittorrent is running, enables the Web UI config if needed, restarts, adds, and reports state/save path.
@@ -15,7 +19,7 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
   - exe: `C:\Users\<user>\scoop\apps\qbittorrent\current\qbittorrent.exe`
   - launch: `qbittorrent.exe --profile=C:\Users\<user>\scoop\persist\qbittorrent\profile`
   - config: `C:\Users\<user>\scoop\persist\qbittorrent\profile\qBittorrent\config\qBittorrent.ini` (5.x uses `.ini`; the old `%APPDATA%\qBittorrent\qBittorrent.conf` is **ignored** - writing WebUI settings there does nothing)
-  - downloads default to `...\profile\qBittorrent\downloads`
+  - downloads default to `...\profile\qBittorrent\downloads` — **user wants real downloads at `C:\Users\<user>\Downloads`** (changed 2026-08-17): set global `save_path` via `POST /api/v2/app/setPreferences` (body `json={"save_path":"C:\\Users\\<user>\\Downloads"}`), and move existing torrents with `POST /api/v2/torrents/setLocation` (form `hashes`, `location`) which relocates files on disk. `apps\qbittorrent\current\profile` is a **junction** to `persist\qbittorrent\profile`, so `--profile` and bare launches share one config.
   - log: `...\profile\qBittorrent\data\logs\` (check here when WebUI won't start)
 - **WebUI is disabled by default** and 5.x refuses to enable it without credentials: log line `WebUI: Credentials are not set`. must set all of:
   ```
