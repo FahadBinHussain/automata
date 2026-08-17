@@ -1,23 +1,26 @@
 # yts.lt (YTS) movie search via the public JSON API. no browser needed.
-# usage: .\search.ps1 -Query "x-men first class" [-Quality 1080p] [-Seeds 10] [-Add]
+# usage: .\search.ps1 -Query "x-men first class" [-Quality 1080p] [-Seeds 10] [-Add] [-Allow720]
 # prints: <yts-id> | <title> (<year>) | <quality> <type> seeds=<n> hash=<hex>
 # -Add: pick the top match and add its magnet to qBittorrent via ..\qbittorrent.com\add-torrent.ps1
+# default pick rule: never below 1080p. -Allow720 relaxes that only when nothing >=1080p exists.
 param(
   [Parameter(Mandatory = $true)][string]$Query,
   [string]$Quality,
   [int]$Seeds = 0,
-  [switch]$Add
+  [switch]$Add,
+  [switch]$Allow720
 )
 
-$tiers = @('1080p', '720p', '2160p')
+$tiers = if ($Allow720) { @('1080p', '720p', '2160p') } else { @('1080p', '2160p') }
 $base = "https://yts.lt/api/v2/list_movies.json?query_term=$([uri]::EscapeDataString($Query))&limit=5"
 $r = Invoke-WebRequest -Uri $base -TimeoutSec 20 -UseBasicParsing
 $j = ($r.Content | ConvertFrom-Json)
 if (-not $j.data -or -not $j.data.movies) { "no results"; exit 1 }
 
 foreach ($m in $j.data.movies) {
-  $picks = if ($Quality) { $m.torrents | Where-Object { $_.quality -eq $Quality } } else {
-    $s = $m.torrents | Where-Object { $_.seeds -ge $Seeds } | Sort-Object { $tiers.IndexOf($_.quality) }
+  $cands = $m.torrents | Where-Object { $tiers -contains $_.quality }
+  $picks = if ($Quality) { $cands | Where-Object { $_.quality -eq $Quality } } else {
+    $s = $cands | Where-Object { $_.seeds -ge $Seeds } | Sort-Object { $tiers.IndexOf($_.quality) }
     if ($s) { @($s)[0] } else { $null }
   }
   if ($picks) {
