@@ -5,14 +5,18 @@ Wakes a machine via Wake-on-LAN magic packet.
 .DESCRIPTION
 Sends a WoL magic packet (UDP broadcast port 9) to the given MAC.
 Works only on the same LAN as the target.
+Defaults target the home desktop (desktop-main); MAC + LAN broadcast for the
+MiWiFi router network (<lan-cidr>). MAC inventory lives in
+%APPDATA%\mainframe\accounts\tailscale\<email>\machines.json.
 
 Usage:
+  .\wake-desktop.ps1                      # wake desktop-main (defaults)
   .\wake-desktop.ps1 -Mac "AA-BB-CC-DD-EE-FF" -Broadcast "192.168.1.255"
 #>
 
 param(
-    [Parameter(Mandatory = $true)][string]$Mac,
-    [Parameter(Mandatory = $true)][string]$Broadcast,
+    [string]$Mac = "<mac>",
+    [string]$Broadcast = "<broadcast-ip>",
     [int]$Port = 9
 )
 
