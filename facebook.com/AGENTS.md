@@ -10,6 +10,14 @@ murmur/.env), MURMUR_HF_SPACE_URL (else http://127.0.0.1:8791), COOKIE_HEALTH_LO
 $env:TEMP\lumen-cookie-health.log), BNP_COOKIE_REFRESH_* tuning vars. full docs in the
 script header. run: `pwsh cookie-health.ps1` or `-Loop`.
 
+**proxy gotcha (2026-08-18)**: the /api/health call uses `-NoProxy` — never let it
+depend on the system proxy. symptom: every check logged
+`UNREACHABLE (... actively refused it. (127.0.0.1:7890))` while fresh pwsh processes
+hit the bridge fine — the long-lived watch window caches WebRequest.DefaultWebProxy
+at boot, so a proxy enabled at logon keeps being used hours after ProxyEnable=0.
+the window picks up script edits on the next cycle (script files re-read per
+invocation), but a restart of the watch task is the belt-and-suspenders move.
+
 ## lumen-cookie-health-watch.ps1 (VISIBLE window)
 
 murmur-task-style visible console window so the user can see the watchdog working:

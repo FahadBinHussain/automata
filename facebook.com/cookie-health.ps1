@@ -136,7 +136,12 @@ function Invoke-CookieRefresh {
 function Check-CookieHealth {
     Log "--- COOKIE HEALTH CHECK ---" Cyan
     try {
-        $null = Invoke-RestMethod -Uri "$BridgeUrl/api/health" -TimeoutSec 10
+        # -NoProxy: the health check must never depend on the machine's system
+        # proxy state. long-lived watch windows cache WebRequest.DefaultWebProxy
+        # at boot, so a proxy enabled at logon keeps being used even after it's
+        # disabled (2026-08-18: stale 127.0.0.1:7890 proxy refused every check
+        # while fresh pwsh processes worked fine).
+        $null = Invoke-RestMethod -Uri "$BridgeUrl/api/health" -TimeoutSec 10 -NoProxy
         Log "  bridge $BridgeUrl/api/health: ok" Green
     } catch {
         Log "  bridge $BridgeUrl/api/health: UNREACHABLE ($($_.Exception.Message))" Red
