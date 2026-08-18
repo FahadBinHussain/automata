@@ -4,7 +4,7 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
 
 ## pick rules
 
-- **always 1080p minimum** (user rule, 2026-08-17): never add a 720p torrent; pick the best-seeded 1080p, else 2160p. `yts.lt\search.ps1` enforces this by default (`-Allow720` to relax).
+- **4K first, 1080p floor** (user rule, 2026-08-17): always prefer 2160p when it exists with seeds; fall back to 1080p; never below 1080p (unless nothing >=1080p exists, e.g. shorts/SD-only extras). `yts.lt\search.ps1` enforces this by default (`-Allow720` to relax).
 
 ## scripts
 
