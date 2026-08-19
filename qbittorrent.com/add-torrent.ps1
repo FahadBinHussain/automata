@@ -93,7 +93,24 @@ $body = @{ urls = $Url; paused = if ($Paused) { 'true' } else { 'false' } }
 $add = Invoke-RestMethod -Uri "$baseUrl/api/v2/torrents/add" -Method Post -Body $body -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 30
 Write-Host "[add-torrent] add result: success=$($add.success_count) failures=$($add.failure_count)"
 
-# 4. report status
+# 4. apply sequential + first/last-piece download (user default for all torrents)
+#    note: ini SeqDL/FLPPieces defaults are NOT applied to WebAPI adds on 5.2.1,
+#    so set explicitly after every add (2026-08-18)
+if ($add.success_count -gt 0) {
+    $hash = ($Url -replace '^magnet:\?xt=urn:btih:', '') -split '&' | Select-Object -First 1
+    if ($hash) {
+        $info = Invoke-RestMethod -Uri "$baseUrl/api/v2/torrents/info?hashes=$hash" -TimeoutSec 10
+        if ($info -and $info[0].seq_dl -eq $false) {
+            Invoke-RestMethod -Uri "$baseUrl/api/v2/torrents/toggleSequentialDownload" -Method Post -Body @{ hashes = $hash } -TimeoutSec 10 | Out-Null
+        }
+        if ($info -and $info[0].f_l_piece_prio -eq $false) {
+            Invoke-RestMethod -Uri "$baseUrl/api/v2/torrents/toggleFirstLastPiecePrio" -Method Post -Body @{ hashes = $hash } -TimeoutSec 10 | Out-Null
+        }
+        Write-Host "[add-torrent] seq_dl + first_last_piece_prio ensured"
+    }
+}
+
+# 5. report status
 Start-Sleep -Seconds 4
 $hash = ($Url -replace '^magnet:\?xt=urn:btih:', '') -split '&' | Select-Object -First 1
 if ($add.success_count -gt 0 -and $hash) {
