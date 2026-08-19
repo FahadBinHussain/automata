@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.6.2
-// @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud (YouTube search buttons), all synced to one Neon Postgres database.
+// @version      0.7.3
+// @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
 // @match        https://open.spotify.com/*
 // @match        https://soundcloud.com/*
 // @match        https://www.soundcloud.com/*
+// @match        https://music.youtube.com/*
 // @run-at       document-idle
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -43,7 +44,7 @@
 
 	const HOST = location.hostname;
 	const IS_YT = HOST === "www.youtube.com" || HOST === "m.youtube.com";
-	const IS_MUSIC = HOST === "open.spotify.com" || HOST === "soundcloud.com" || HOST === "www.soundcloud.com";
+	const IS_MUSIC = HOST === "open.spotify.com" || HOST === "soundcloud.com" || HOST === "www.soundcloud.com" || HOST === "music.youtube.com";
 
 	// =====================================================================
 	// shared infra: used by BOTH the youtube tracker and the music tracker.
@@ -911,7 +912,7 @@ on conflict (key) do update set
 			await neonQuery(`create table if not exists visited_tracks (
   id         text primary key,
   name       text not null,
-  source     text not null check (source in ('spotify','soundcloud')),
+  source     text not null check (source in ('spotify','soundcloud','ytmusic')),
   updated_at timestamptz not null default now())`);
 			status("tables ready");
 		} catch (e) {
@@ -1244,6 +1245,7 @@ on conflict (key) do update set
 	// GM storage keys - must not collide with the youtube tracker's keys.
 	const K_VT_SET = "mVisitedSet";
 	const K_VT_LOG = "mVisitedLog";
+	const K_MIGRATED = "mSourceMigrated";
 
 	let visitedTracks = new Set();
 	try {
@@ -1317,7 +1319,7 @@ on conflict (key) do update set
 	}
 
 	function musicSource() {
-		return HOST === "open.spotify.com" ? "spotify" : "soundcloud";
+		return HOST === "open.spotify.com" ? "spotify" : HOST === "music.youtube.com" ? "ytmusic" : "soundcloud";
 	}
 
 	const VT_ICON_SVG = `<svg role="img" height="16" width="16" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`;
@@ -1337,14 +1339,35 @@ on conflict (key) do update set
 
 	function vtrackId(raw) { return String(raw || "").replace(/^\/+/, ""); }
 
+	// Trusted Types safe icon injection: music.youtube.com enforces TrustedHTML
+	// (same as www.youtube.com - the youtube side builds nodes by hand for the
+	// same reason), and it blocks BOTH innerHTML and DOMParser.parseFromString
+	// (even with a non-HTML mime - "requires TrustedHTML assignment"). Build
+	// the icon with createElementNS instead, which is not a Trusted Types sink
+	// and works on every site.
+	function mSvgEl(svgString) {
+		const NS = "http://www.w3.org/2000/svg";
+		const svg = document.createElementNS(NS, "svg");
+		const openTag = svgString.slice(0, svgString.indexOf(">"));
+		for (const m of openTag.matchAll(/([\w-]+)="([^"]*)"/g)) svg.setAttribute(m[1], m[2]);
+		const dm = svgString.match(/<path[^>]*\bd="([^"]*)"/);
+		if (dm) {
+			const path = document.createElementNS(NS, "path");
+			path.setAttribute("d", dm[1]);
+			svg.appendChild(path);
+		}
+		return svg;
+	}
+
 	function mUpdateIcon(btn, trackId) {
 		const visited = isHistoryLoaded && trackId && visitedTracks.has(trackId);
+		btn.replaceChildren();
 		if (visited) {
-			btn.innerHTML = VT_VISITED_SVG;
+			btn.append(mSvgEl(VT_VISITED_SVG));
 			btn.title = "Visited (Shift+Click to clear)";
 			btn.style.color = "#E22134";
 		} else {
-			btn.innerHTML = VT_ICON_SVG;
+			btn.append(mSvgEl(VT_ICON_SVG));
 			btn.title = isCloudDisabled
 				? "Cloud sync offline — click will open YouTube but won't save"
 				: "Search on YouTube";
@@ -1484,6 +1507,29 @@ on conflict (key) do update set
 		});
 	}
 
+	function mEnsureYtMusicSource() {
+		if (!connStr() || GM_getValue(K_MIGRATED, "0") === "1") return;
+		// 0.7.0: the YT Music buttons write source='ytmusic', which the old
+		// visited_tracks check constraint rejected. Recreate the constraint
+		// idempotently so existing DBs don't need a manual ALTER; fresh installs
+		// get the new constraint from the Create-table button / schema.sql.
+		neonQuery("alter table visited_tracks drop constraint if exists visited_tracks_source_check")
+			.then(() =>
+				neonQuery(
+					"alter table visited_tracks add constraint visited_tracks_source_check check (source in ('spotify','soundcloud','ytmusic'))"
+				)
+			)
+			.then(() => {
+				GM_setValue(K_MIGRATED, "1");
+				mlog("visited_tracks source constraint updated (added ytmusic)");
+			})
+			.catch((err) => {
+				const msg = String(err && err.message || err);
+				// table doesn't exist yet -> Create-table button handles fresh installs
+				if (!/does not exist/i.test(msg)) mlog("source constraint update failed: " + msg.slice(0, 120));
+			});
+	}
+
 	function mFindButton(container, trackId) {
 		return Array.from(container.querySelectorAll(`.${VT_BUTTON_CLASS}`)).find((b) => b.dataset.trackId === trackId);
 	}
@@ -1493,6 +1539,7 @@ on conflict (key) do update set
 	function mAddAllButtons() {
 		if (HOST === "open.spotify.com") { mAddSpotify(); return; }
 		if (HOST === "soundcloud.com" || HOST === "www.soundcloud.com") mAddSoundCloud();
+		if (HOST === "music.youtube.com") mAddYTMusic();
 	}
 
 	function mAddSpotify() {
@@ -1663,7 +1710,99 @@ on conflict (key) do update set
 		}
 	}
 
+	function mYTMVideoId(el) {
+		if (!el) return null;
+		const href =
+			(el.getAttribute && el.getAttribute("href")) ||
+			(el.querySelector && el.querySelector('a[href*="watch?v="]')?.getAttribute("href"));
+		if (href) {
+			try {
+				return new URL(href, location.origin).searchParams.get("v");
+			} catch {}
+		}
+		return (el.getAttribute && el.getAttribute("video-id")) || null;
+	}
+
+	function mYTMArtist(container) {
+		const byline = container.querySelector(".byline, .artist, .subtitle");
+		if (byline) {
+			const links = Array.from(byline.querySelectorAll("a"))
+				.map((a) => vclean(a.textContent))
+				.filter(Boolean);
+			if (links.length) return links.join(", ");
+			const t = vclean(byline.textContent);
+			if (t) return t;
+		}
+		// new flex-columns UI: the first secondary column is the artist/channel
+		const col = container.querySelector(".secondary-flex-columns .flex-column yt-formatted-string");
+		if (col) {
+			const links = Array.from(col.querySelectorAll("a"))
+				.map((a) => vclean(a.textContent))
+				.filter(Boolean);
+			if (links.length) return links.join(", ");
+			const t = vclean(col.textContent);
+			if (t) return t;
+		}
+		return "";
+	}
+
+	function mYTMount(container, titleLink, id, songName, artistName) {
+		const ytUrl = vbuildYT(artistName, songName);
+		const existing = mFindButton(container, id);
+		if (existing) {
+			existing.href = ytUrl;
+			mUpdateIcon(existing, id);
+			return;
+		}
+		const btn = mCreateButton(id, songName, artistName, ytUrl, { marginLeft: "8px", marginRight: "6px" });
+		// Append to the row's title column (a flex container) instead of inside
+		// the ellipsis-truncate title element: that one clips and re-renders,
+		// which hid/dropped the button on the new flex-columns UI.
+		const col =
+			titleLink.closest(".title-column") ||
+			(titleLink.closest(".track-title") || titleLink).parentElement;
+		col.style.display = "flex";
+		col.style.alignItems = "center";
+		col.appendChild(btn);
+	}
+
+	function mAddYTMusic() {
+		// track rows in search results / playlists / queue. one bad row must
+		// not abort the rest (an uncaught throw here lands in mFetchHistory's
+		// .catch and flips the whole tracker to the offline banner).
+		document.querySelectorAll("ytmusic-responsive-list-item-renderer, ytmusic-queue-item-renderer").forEach((row) => {
+			try {
+				const titleLink = row.querySelector('a[href*="watch?v="], .track-title a, .track-title');
+				if (!titleLink) return;
+				const id = mYTMVideoId(titleLink) || row.getAttribute("video-id");
+				if (!id) return;
+				const songName = vclean(titleLink.textContent) || "";
+				if (!songName) return;
+				mYTMount(row, titleLink, id, songName, mYTMArtist(row));
+			} catch (err) {
+				mlog("ytmusic row mount failed: " + String(err && err.message).slice(0, 120));
+			}
+		});
+		// now-playing bar
+		const bar = document.querySelector("ytmusic-player-bar");
+		if (bar) {
+			try {
+				const barTitle = bar.querySelector(".title a, .title");
+				if (barTitle) {
+					const id = mYTMVideoId(barTitle) || bar.getAttribute("video-id");
+					if (id) {
+						const songName = vclean(barTitle.textContent) || "";
+						mYTMount(bar, barTitle, id, songName, mYTMArtist(bar));
+					}
+				}
+			} catch (err) {
+				mlog("ytmusic player-bar mount failed: " + String(err && err.message).slice(0, 120));
+			}
+		}
+	}
+
 	mFetchHistory();
+	mEnsureYtMusicSource();
 
 	new MutationObserver(() => {
 		if (vdebounceTimer) clearTimeout(vdebounceTimer);
