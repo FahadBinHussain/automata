@@ -100,21 +100,29 @@ endpoint-id = first part of the Neon hostname, e.g. host
 
 ## Browser/extension Neon access (browser-neon-pac.ps1)
 
-The relay only helps psql/CLI - Chrome MV3 extensions (imgvault's service
-worker) cannot use a local relay, and while Proton is on the extension's
-Neon writes (updateImage/Fix/link actions) hang or silently no-op. Fix: a
-WinINET PAC file that routes ONLY `*.neon.tech` through mihomo's socks port,
-everything else DIRECT. Edge/Chrome + their SW fetches honor the system PAC.
+**2026-08-19 correction: Proton only blocks NON-443 egress.** direct psql
+(5432) to the Neon endpoint times out on all IPs while Proton is on, but
+plain HTTPS (443) to the SAME host responds fine (`curl` -> 400, 3/3 tries)
+and the WSS 443 endpoint answers too. the extension SW connects over
+WSS/443, so it reaches Neon DIRECT with Proton on — the earlier
+"proton blocks extension SW writes" conclusion was wrong; the real culprit
+was a dead url-test node when a PAC was active. use the PAC only if 443
+ever gets blocked too (unproven), and remember: while the PAC is enabled,
+a dead socks node makes neon.tech UNREACHABLE for the browser (fetch fails,
+"Link failed: Error connecting to database") even though direct would work.
+when in doubt: disable the PAC and test direct first.
 
 - script: `browser-neon-pac.ps1` (`-Enable` / `-Disable` / `-Status`), PAC
   file `neon-pac.js` in this folder (SOCKS5 127.0.0.1:7891 for neon.tech,
-  DIRECT fallback). sets `HKCU\...\Internet Settings` ProxyEnable=1 +
-  AutoConfigURL=`file:///.../neon-pac.js` + WinINET refresh P/Invoke.
+  DIRECT fallback). serves the PAC over `http://127.0.0.1:8000/neon-pac.js`
+  (python http.server, started detached) - file:// PACs do NOT load in a
+  normal browser session and fall back to a stale ProxyServer.
 - read the socks port from `binConfigs/config.json` by REGEX - the file is
   YAML with a UTF-8 BOM (as of 2026-08-19), NOT json, ConvertFrom-Json fails.
-- verified 2026-08-19: headless Edge with the system PAC (no flags) loads
-  console.neon.tech through socks; google still loads direct. imgvault
-  extension can then reach Neon in-browser while Proton is on.
+- verified 2026-08-19: headless Edge with the system PAC loads
+  console.neon.tech through socks; google loads direct; firestore.googleapis.com
+  responds. later same day: socks node dead -> neon.tech fetch failed from
+  the browser while direct curl worked -> PAC disabled, direct restored.
 - same node flakiness applies: if the PROXY url-test group sits on a dead
   node, neon requests hang until it re-picks a live one - retry, don't
   rebuild anything. never diagnose with `curl telnet://` through socks (hangs
