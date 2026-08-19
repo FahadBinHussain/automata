@@ -97,3 +97,26 @@ endpoint-id = first part of the Neon hostname, e.g. host
 - Verified 2026-08-17 with Proton on + v2rayN/mihomo: psql SELECT works,
   3-row lumen_snapshots upsert works. Re-verified 2026-08-18 after a core
   resurrection: DELETE + SELECT fine.
+
+## Browser/extension Neon access (browser-neon-pac.ps1)
+
+The relay only helps psql/CLI - Chrome MV3 extensions (imgvault's service
+worker) cannot use a local relay, and while Proton is on the extension's
+Neon writes (updateImage/Fix/link actions) hang or silently no-op. Fix: a
+WinINET PAC file that routes ONLY `*.neon.tech` through mihomo's socks port,
+everything else DIRECT. Edge/Chrome + their SW fetches honor the system PAC.
+
+- script: `browser-neon-pac.ps1` (`-Enable` / `-Disable` / `-Status`), PAC
+  file `neon-pac.js` in this folder (SOCKS5 127.0.0.1:7891 for neon.tech,
+  DIRECT fallback). sets `HKCU\...\Internet Settings` ProxyEnable=1 +
+  AutoConfigURL=`file:///.../neon-pac.js` + WinINET refresh P/Invoke.
+- read the socks port from `binConfigs/config.json` by REGEX - the file is
+  YAML with a UTF-8 BOM (as of 2026-08-19), NOT json, ConvertFrom-Json fails.
+- verified 2026-08-19: headless Edge with the system PAC (no flags) loads
+  console.neon.tech through socks; google still loads direct. imgvault
+  extension can then reach Neon in-browser while Proton is on.
+- same node flakiness applies: if the PROXY url-test group sits on a dead
+  node, neon requests hang until it re-picks a live one - retry, don't
+  rebuild anything. never diagnose with `curl telnet://` through socks (hangs
+  on telnet negotiation regardless of connectivity) - use a real HTTPS
+  request as the egress probe.
