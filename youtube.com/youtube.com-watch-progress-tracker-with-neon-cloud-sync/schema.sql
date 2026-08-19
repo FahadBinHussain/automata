@@ -29,7 +29,7 @@ create table if not exists ui_prefs (
 create table if not exists visited_tracks (
   id         text primary key,
   name       text not null,
-  source     text not null check (source in ('spotify','soundcloud')),
+  source     text not null check (source in ('spotify','soundcloud','ytmusic')),
   updated_at timestamptz not null default now()
 );
 
