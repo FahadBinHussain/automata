@@ -34,6 +34,8 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
 - Web API (v2, no auth needed from localhost when `LocalHostAuth=false`):
   - `GET  /api/v2/app/version`
   - `POST /api/v2/torrents/add` - form field `urls` (magnet or http .torrent URL), `paused=true|false`; response has `success_count`/`failure_count`
-  - `GET  /api/v2/torrents/info?hashes=<infohash>` - state, progress, save_path
+  - `GET  /api/v2/torrents/info?hashes=<infohash>` - state, progress, save_path, seq_dl, f_l_piece_prio
   - `POST /api/v2/torrents/delete?hashes=<infohash>&deleteFiles=true` - **query-string params get dropped with "Missing required parameters" on this build; send a form body instead**: `Invoke-RestMethod -Method Post -Body @{ hashes = '<hash>'; deleteFiles = 'true' }` (hash must be lowercase or WebUI rejects).
+  - `POST /api/v2/torrents/toggleSequentialDownload` + `toggleFirstLastPiecePrio` - form `hashes`; these EXIST on 5.2.1 (earlier "404" claim was wrong). **toggle flips state** - only call when `seq_dl`/`f_l_piece_prio` is currently false.
+- **sequential + first/last-piece download (2026-08-18)**: user wants BOTH on every torrent. the ini `[Preferences]` keys `SeqDL=true`/`FLPPieces=true` survive qBittorrent's own ini rewrites but are **NOT applied to WebAPI adds** on 5.2.1 (new torrents land with seq_dl=False). `add-torrent.ps1` now ensures both via the toggle endpoints after every successful add (idempotent - only toggles when false).
 - getting magnets: 1337xx.to mirror detail pages work with plain HTTP via `..\1337x.to\get-magnet.ps1` (search on that mirror is a honeypot - never trust it). for movie search use `..\yts.lt\search.ps1`, for games/niche `..\thepiratebay.org\search.ps1` - both have `-Add` to push straight in here.
