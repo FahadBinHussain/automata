@@ -11,10 +11,10 @@ if (Test-Path $envLocal) {
     }
 }
 
-$StoreDir = "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store"
+$StoreDir = if ($env:WACLI_STORE) { $env:WACLI_STORE } else { "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store" }
 $DbPath = "$StoreDir\wacli.db"
 $StatePath = "$env:TEMP\murmur-poller-state.json"
-$TokenPath = "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt"
+$TokenPath = if ($env:HF_TOKEN_FILE) { $env:HF_TOKEN_FILE } else { "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt" }
 $HfToken = (Get-Content $TokenPath -Raw).Trim()
 $MurmurWebhook = if ($env:MURMUR_WEBHOOK_URL) { $env:MURMUR_WEBHOOK_URL.Trim() } else { "https://<murmur-space>.hf.space/wacli/webhook" }
 $WebhookSecret = $env:MURMUR_WEBHOOK_SECRET

@@ -14,7 +14,7 @@ if (Test-Path $envLocal) {
 }
 
 $HF_BASE   = if ($env:MURMUR_HF_SPACE_URL) { $env:MURMUR_HF_SPACE_URL.Trim() } else { 'https://<murmur-space>.hf.space' }
-$HF_TOKEN  = (Get-Content "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt" -Raw).Trim()
+$HF_TOKEN  = if ($env:HF_TOKEN_FILE) { (Get-Content $env:HF_TOKEN_FILE -Raw).Trim() } else { (Get-Content "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt" -Raw).Trim() }
 $WACLI_BIN = if ($env:WACLI_BIN) { $env:WACLI_BIN } else { "$env:USERPROFILE\go\bin\wacli.exe" }
 $WACLI_STORE = if ($env:WACLI_STORE) { $env:WACLI_STORE } else { "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store" }
 
