@@ -16,6 +16,9 @@ Desktop.ini
 **/.env.local
 youtube.com/youtube.com-stream-watch-codex-automation.config.json
 
+# Build artifacts (embeds machine build paths - rebuild from source)
+tools/socks5-proxy/*.exe
+
 # Dependency folders
 **/node_modules/
 **/.pnpm-store/
