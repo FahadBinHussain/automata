@@ -3,10 +3,20 @@
 # Polls HF Space /api/outbox for replies and sends them via wacli
 
 $ErrorActionPreference = 'Stop'
-$HF_BASE   = 'https://<murmur-space>'
+
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+
+$HF_BASE   = if ($env:MURMUR_HF_SPACE_URL) { $env:MURMUR_HF_SPACE_URL.Trim() } else { 'https://<murmur-space>.hf.space' }
 $HF_TOKEN  = (Get-Content "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt" -Raw).Trim()
-$WACLI_BIN = 'C:\Users\<user>\go\bin\wacli.exe'
-$WACLI_STORE = 'C:\Users\<user>\AppData\Roaming\mainframe\accounts\whatsapp\<your-phone-number>\store'
+$WACLI_BIN = if ($env:WACLI_BIN) { $env:WACLI_BIN } else { "$env:USERPROFILE\go\bin\wacli.exe" }
+$WACLI_STORE = if ($env:WACLI_STORE) { $env:WACLI_STORE } else { "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store" }
 
 $POLL_INTERVAL_SEC = 5
 $STATE_PATH = "$env:TEMP\murmur-reverse-poller-state.json"

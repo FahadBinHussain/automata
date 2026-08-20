@@ -26,7 +26,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "chat",
-      description: "Send a chat message to TheOldLLM (https://<app-url>). Useful for web-search-enabled answers, coding help, or general conversation. Use when the user asks to use TheOldLLM or when web search is needed.",
+      description: "Send a chat message to TheOldLLM (URL from THEOLDLLM_ORIGIN env or .env.local). Useful for web-search-enabled answers, coding help, or general conversation. Use when the user asks to use TheOldLLM or when web search is needed.",
       inputSchema: {
         type: "object",
         properties: {

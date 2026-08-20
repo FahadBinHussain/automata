@@ -1,10 +1,22 @@
 param(
     [string]$ListenPort = "5433",
-    [string]$TargetHost = "<neon-endpoint>.us-west-2.aws.neon.tech",
+    [string]$TargetHost = "",
     [string]$TargetPort = "5432",
     [string]$SocksHost = "127.0.0.1",
     [string]$SocksPort = "7891"
 )
+
+# Neon endpoint host is personal: set NEON_FWD_HOST env or put it in
+# tools/neon-via-proton/.env.local
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+if (-not $TargetHost) { $TargetHost = if ($env:NEON_FWD_HOST) { $env:NEON_FWD_HOST.Trim() } else { "<neon-endpoint>.aws.neon.tech" } }
 
 # fail fast if the listen port is already taken (a second instance is never
 # wanted - reuse the running relay instead of stacking another one).

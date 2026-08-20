@@ -3,12 +3,19 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+try {
+  for (const line of readFileSync(path.join(import.meta.dirname, ".env.local"), "utf8").split("\n")) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+  }
+} catch {}
+
 const DEFAULTS = {
   clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || "",
   email: getDefaultEmail(),
   project: process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "<gcp-project-id>",
-  redirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI || "https://<app-url>/__/auth/handler",
-  origin: process.env.GOOGLE_OAUTH_ORIGIN || "https://<app-url>",
+  redirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI || "https://<app>.vercel.app/__/auth/handler",
+  origin: process.env.GOOGLE_OAUTH_ORIGIN || "https://<app>.vercel.app",
   port: 9322,
   browserPath: findBrowserPath(),
 };

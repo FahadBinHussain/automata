@@ -16,8 +16,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $baseUrl = "http://localhost:$WebUiPort"
 
-$scoopProfile = "C:\Users\<user>\scoop\persist\qbittorrent\profile"
-$scoopExe = "C:\Users\<user>\scoop\apps\qbittorrent\current\qbittorrent.exe"
+$scoopProfile = "$env:USERPROFILE\scoop\persist\qbittorrent\profile"
+$scoopExe = "$env:USERPROFILE\scoop\apps\qbittorrent\current\qbittorrent.exe"
 $iniPath = Join-Path $scoopProfile "qBittorrent\config\qBittorrent.ini"
 
 function Test-WebUi {

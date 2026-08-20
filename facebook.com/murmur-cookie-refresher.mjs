@@ -25,6 +25,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+try {
+  for (const line of readFileSync(join(import.meta.dirname, ".env.local"), "utf8").split("\n")) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+  }
+} catch {}
+
 const DEFAULTS = {
   email: process.env.MAINFRAME_BROWSERUI_EMAIL || "<your-email>",
   hfTokenFile:
@@ -39,7 +46,7 @@ const DEFAULTS = {
       "<your-email>",
       "token",
     ),
-  murmurUrl: process.env.MURMUR_REFRESH_URL || "https://<murmur-space>",
+  murmurUrl: process.env.MURMUR_REFRESH_URL || "https://<murmur-space>.hf.space",
   facebookUrl: process.env.MURMUR_REFRESH_FB_URL || "https://www.messenger.com",
   port: Number(process.env.MURMUR_REFRESH_PORT || 9377),
   connectMs: Number(process.env.MURMUR_REFRESH_CONNECT_MS || 8000),
