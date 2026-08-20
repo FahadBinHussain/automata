@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.3
+// @version      0.7.4
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1723,6 +1723,34 @@ on conflict (key) do update set
 		return (el.getAttribute && el.getAttribute("video-id")) || null;
 	}
 
+	function mYTMArtistFromFlex(container) {
+		// flex-columns UI: the columns live in a JSON attribute on the renderer
+		// (secondary-flex-columns="[{...}]"), not in DOM classes, so a CSS query
+		// never finds the artist. parse the attribute and pick the run(s) whose
+		// navigationEndpoint points at an artist page (pageType
+		// MUSIC_PAGE_TYPE_ARTIST, browseId starts with UC).
+		const raw = container.getAttribute("secondary-flex-columns");
+		if (!raw) return "";
+		try {
+			const cols = JSON.parse(raw);
+			const artists = [];
+			for (const col of cols) {
+				for (const run of (col && col.text && col.text.runs) || []) {
+					const ep = run && run.navigationEndpoint && run.navigationEndpoint.browseEndpoint;
+					const music = ep && ep.browseEndpointContextSupportedConfigs &&
+						ep.browseEndpointContextSupportedConfigs.browseEndpointContextMusicConfig;
+					if (music && music.pageType === "MUSIC_PAGE_TYPE_ARTIST") {
+						const t = vclean(run.text);
+						if (t && !artists.includes(t)) artists.push(t);
+					}
+				}
+			}
+			return artists.join(", ");
+		} catch {
+			return "";
+		}
+	}
+
 	function mYTMArtist(container) {
 		const byline = container.querySelector(".byline, .artist, .subtitle");
 		if (byline) {
@@ -1733,16 +1761,10 @@ on conflict (key) do update set
 			const t = vclean(byline.textContent);
 			if (t) return t;
 		}
-		// new flex-columns UI: the first secondary column is the artist/channel
-		const col = container.querySelector(".secondary-flex-columns .flex-column yt-formatted-string");
-		if (col) {
-			const links = Array.from(col.querySelectorAll("a"))
-				.map((a) => vclean(a.textContent))
-				.filter(Boolean);
-			if (links.length) return links.join(", ");
-			const t = vclean(col.textContent);
-			if (t) return t;
-		}
+		// flex-columns UI: no DOM classes for the artist anymore, parse the
+		// renderer's secondary-flex-columns JSON attribute instead.
+		const flex = mYTMArtistFromFlex(container);
+		if (flex) return flex;
 		return "";
 	}
 
