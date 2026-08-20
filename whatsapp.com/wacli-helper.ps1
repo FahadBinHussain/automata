@@ -32,7 +32,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$mainframe = "C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1"
+$mainframe = "$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1"
 
 function Get-SaturdayDate {
     $today = Get-Date

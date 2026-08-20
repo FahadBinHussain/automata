@@ -7,8 +7,8 @@ param(
     [int]$WaitSeconds = 5
 )
 
-$exePath = "C:\Users\<user>\Downloads\notion_manager\notion-manager.exe"
-$repoDir = "C:\Users\<user>\Downloads\notion_manager"
+$exePath = "$env:USERPROFILE\Downloads\notion_manager\notion-manager.exe"
+$repoDir = "$env:USERPROFILE\Downloads\notion_manager"
 $port = 8081
 $healthUrl = "http://localhost:$port/health"
 

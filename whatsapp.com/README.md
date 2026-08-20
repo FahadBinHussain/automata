@@ -1,7 +1,7 @@
 # WhatsApp Web Automata
 
 Local WhatsApp automation lives here. Account/session ownership lives in
-`C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1`.
+`$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1`.
 
 Two backends are available:
 
@@ -15,25 +15,25 @@ Two backends are available:
 First-time QR login (terminal QR, not Chrome):
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 login-baileys +8801XXXXXXXXX
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 login-baileys +8801XXXXXXXXX
 ```
 
 Check connection:
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 run-baileys status
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 run-baileys status
 ```
 
 Send text (requires `--to`):
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 run-baileys send-text --to +8801YYYYYYYY --text "hi"
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 run-baileys send-text --to +8801YYYYYYYY --text "hi"
 ```
 
 Send media:
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 run-baileys send-media --to +8801YYYYYYYY --file C:\tmp\image.png --caption "test"
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 run-baileys send-media --to +8801YYYYYYYY --file C:\tmp\image.png --caption "test"
 ```
 
 Auth is stored under `%APPDATA%\mainframe\accounts\whatsapp\<phone>\baileys-auth`.
@@ -43,21 +43,21 @@ Auth is stored under `%APPDATA%\mainframe\accounts\whatsapp\<phone>\baileys-auth
 First login:
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 login +8801XXXXXXXXX
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 login +8801XXXXXXXXX
 ```
 
 After the QR session exists, relaunch the profile minimized:
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 launch
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 launch
 ```
 
 Commands:
 
 ```powershell
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 run status
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 run send-text --text "hi"
-C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1 run send-media --file C:\tmp\image.png --caption "test"
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 run status
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 run send-text --text "hi"
+$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1 run send-media --file C:\tmp\image.png --caption "test"
 ```
 
 ## Boundaries

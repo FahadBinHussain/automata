@@ -17,8 +17,8 @@ param(
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$coreExe = "C:\Users\<user>\scoop\apps\v2rayn\current\bin\mihomo\mihomo.exe"
-$cfgDir  = "C:\Users\<user>\scoop\apps\v2rayn\current\binConfigs"
+$coreExe = "$env:USERPROFILE\scoop\apps\v2rayn\current\bin\mihomo\mihomo.exe"
+$cfgDir  = "$env:USERPROFILE\scoop\apps\v2rayn\current\binConfigs"
 $cfgFile = Join-Path $cfgDir "config.json"
 $socksPort = 7891
 $ctrlPort  = 10813

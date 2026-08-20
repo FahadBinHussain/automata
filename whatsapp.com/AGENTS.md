@@ -1,6 +1,6 @@
 # WhatsApp automation (local notes)
 
-helper: `C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1`; profiles keyed by phone number, not email
+helper: `$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1`; profiles keyed by phone number, not email
 
 ## Account workflow
 
@@ -13,5 +13,5 @@ helper: `C:\Users\<user>\Downloads\mainframe\whatsapp-account.ps1`; profiles key
 - never send messages, mark broad chats read, scrape unrelated history, or print cookies unless i explicitly ask.
 - for "what did X say": find the chat, read only the latest relevant messages/media, summarize/transcribe only that.
 - voice notes: download/decrypt to `C:\tmp`, validate with `ffmpeg`, transcribe via LiteLLM `gemini-3.5-flash` (global AI-stack rule applies — no direct Gemini keys).
-- useful temp scripts > `C:\Users\<user>\Downloads\automata\whatsapp.com`, one-offs > `C:\tmp`.
+- useful temp scripts > `$env:USERPROFILE\Downloads\automata\whatsapp.com`, one-offs > `C:\tmp`.
 - never commit secrets/profiles/media/transcripts unless i explicitly ask.

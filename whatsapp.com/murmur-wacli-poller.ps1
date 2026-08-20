@@ -2,12 +2,21 @@
 
 $ErrorActionPreference = "Continue"
 
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+
 $StoreDir = "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store"
 $DbPath = "$StoreDir\wacli.db"
 $StatePath = "$env:TEMP\murmur-poller-state.json"
 $TokenPath = "$env:APPDATA\mainframe\accounts\hf\<your-email>\token.txt"
 $HfToken = (Get-Content $TokenPath -Raw).Trim()
-$MurmurWebhook = "https://<murmur-space>/wacli/webhook"
+$MurmurWebhook = if ($env:MURMUR_WEBHOOK_URL) { $env:MURMUR_WEBHOOK_URL.Trim() } else { "https://<murmur-space>.hf.space/wacli/webhook" }
 $WebhookSecret = $env:MURMUR_WEBHOOK_SECRET
 
 function Load-State {

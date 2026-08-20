@@ -18,7 +18,7 @@ if (!manifestPath) {
 
 const profilePath =
   process.argv[3] ||
-  String.raw`C:\Users\<user>\AppData\Roaming\mainframe\accounts\browserui\<your-email>`;
+  String.raw`${process.env.APPDATA}\mainframe\accounts\browserui\<your-email>`;
 
 const headless = /^(1|true|yes)$/i.test(process.env.YOUTUBE_STUDIO_HEADLESS || "");
 const minimized = /^(1|true|yes)$/i.test(process.env.YOUTUBE_STUDIO_MINIMIZED || "");

@@ -5,8 +5,9 @@
 # usage:
 #   .\notion-upload-file.ps1 -PageId <page-id> -FilePath C:\path\file.zip [-FileName name] [-ContentType app/zip]
 #
-# token: read from the mainframe notion profile (default <email>)
-# or pass -Token directly. never print the token.
+# token: read from the mainframe notion profile (default = NOTION_EMAIL env or
+# notion.com/.env.local; personal, never commit) or pass -Token directly.
+# never print the token.
 #
 # returns the uploaded file url; attach id printed on success.
 
@@ -15,11 +16,22 @@ param(
     [Parameter(Mandatory)][string]$FilePath,
     [string]$FileName,
     [string]$ContentType,
-    [string]$Email = '<email>',
+    [string]$Email = "",
     [string]$Token
 )
 
 $ErrorActionPreference = 'Stop'
+
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+
+if (-not $Email) { $Email = $env:NOTION_EMAIL }
 
 if (-not $FileName) { $FileName = [System.IO.Path]::GetFileName($FilePath) }
 if (-not $ContentType) {

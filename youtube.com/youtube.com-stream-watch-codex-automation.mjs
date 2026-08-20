@@ -361,7 +361,7 @@ function sendNotification(message, dedupeKey) {
     '--source',
     'youtube-stream-watch',
     '--thread-id',
-    config.notifyThreadId || process.env.CODEX_NOTIFY_THREAD_ID || '<thread-id>',
+    config.notifyThreadId || process.env.CODEX_NOTIFY_THREAD_ID || '',
     '--title',
     'YouTube stream watch',
     '--message',

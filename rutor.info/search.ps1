@@ -48,7 +48,7 @@ foreach ($res in $results) {
 }
 
 if ($Add -and $results.Count -gt 0) {
-    $add = "C:\Users\<user>\Downloads\automata\qbittorrent.com\add-torrent.ps1"
+    $add = "$env:USERPROFILE\Downloads\automata\qbittorrent.com\add-torrent.ps1"
     $choice = if ($results.Count -eq 1) { 0 } else {
         $n = Read-Host "which one to add (1-$($results.Count), 0 = none)"
         [int]$n - 1

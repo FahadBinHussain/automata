@@ -1,6 +1,6 @@
 # theoldllm-cli
 
-Independent CLI for TheOldLLM (`https://<app-url>`) chat API.
+Independent CLI for TheOldLLM chat API (app URL from `THEOLDLLM_ORIGIN` env or `.env.local` next to the scripts).
 
 Bypasses Vercel WAF by running `fetch()` inside a headless Playwright browser. Token is read from `~/.config/theoldllm/token.txt` at runtime.
 
@@ -113,7 +113,7 @@ An MCP server is also included for tool-based access:
   "mcp": {
     "theoldllm": {
       "type": "local",
-      "command": ["node", "C:/Users/<user>/Downloads/automata/theoldllm/theoldllm-cli/theoldllm-mcp.mjs"],
+      "command": ["node", "<path-to>/theoldllm-cli/theoldllm-mcp.mjs"],
       "enabled": true
     }
   }

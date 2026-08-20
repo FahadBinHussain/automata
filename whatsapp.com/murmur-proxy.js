@@ -5,15 +5,23 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+try {
+  const envLocal = path.join(__dirname, '.env.local');
+  if (fs.existsSync(envLocal)) for (const line of fs.readFileSync(envLocal, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  }
+} catch {}
+
 const PORT = 7870;
-const HF_TARGET = 'https://<murmur-space>/wacli/webhook';
+const HF_TARGET = process.env.MURMUR_WEBHOOK_URL || 'https://<murmur-space>.hf.space/wacli/webhook';
 const HF_TOKEN = process.env.HF_TOKEN || fs.readFileSync(
   path.join(process.env.APPDATA, 'mainframe/accounts/hf/<your-email>/token'),
   'utf8'
 ).trim();
 
-const WACLI_STORE = process.env.WACLI_STORE || 'C:\\Users\\<user>\\AppData\\Roaming\\mainframe\\accounts\\whatsapp\\<your-phone-number>\\store';
-const WACLI_BINARY = process.env.WACLI_BINARY || 'C:\\Users\\<user>\\go\\bin\\wacli.exe';
+const WACLI_STORE = process.env.WACLI_STORE || path.join(process.env.APPDATA, 'mainframe/accounts/whatsapp/<your-phone-number>/store');
+const WACLI_BINARY = process.env.WACLI_BINARY || path.join(process.env.USERPROFILE, 'go/bin/wacli.exe');
 const SQLITE3 = process.env.SQLITE3 || 'sqlite3';
 
 const PROCESSED_IDS_PATH = path.join(process.env.TEMP || 'C:\\tmp', 'murmur-proxy-processed.json');

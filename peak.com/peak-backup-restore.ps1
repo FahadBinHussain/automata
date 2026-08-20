@@ -19,7 +19,7 @@ param(
 
     [string]$ZipPath,
 
-    [string]$GameDir = "C:\Users\<user>\Downloads\games\peak\PEAK.v1.61.a-OFME",
+    [string]$GameDir = "$env:USERPROFILE\Downloads\games\peak\PEAK.v1.61.a-OFME",
 
     [string]$OnlineFixDir = "C:\Users\Public\Documents\OnlineFix\3527290",
 
@@ -98,7 +98,7 @@ function Backup-Peak {
     .\restore.ps1 -GameDir "C:\custom\path"
 #>
 param(
-    [string]$GameDir = "C:\Users\<user>\Downloads\games\peak\PEAK.v1.61.a-OFME",
+    [string]$GameDir = "$env:USERPROFILE\Downloads\games\peak\PEAK.v1.61.a-OFME",
     [string]$OnlineFixDir = "C:\Users\Public\Documents\OnlineFix\3527290",
     [string]$RegistryKey = "HKCU:\Software\LandCrab\PEAK"
 )
@@ -187,7 +187,7 @@ REM Get the directory where this .cmd file is located
 set "SCRIPTDIR=%~dp0"
 
 REM Default game path
-set "GAMEDIR=C:\Users\<user>\Downloads\games\peak\PEAK.v1.61.a-OFME"
+set "GAMEDIR=$env:USERPROFILE\Downloads\games\peak\PEAK.v1.61.a-OFME"
 
 REM Check if game exists at default path
 if not exist "%GAMEDIR%\PEAK.exe" (
