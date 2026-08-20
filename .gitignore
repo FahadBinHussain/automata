@@ -13,6 +13,8 @@ Desktop.ini
 .env
 .env.*
 *.local
+**/.env.local
+youtube.com/youtube.com-stream-watch-codex-automation.config.json
 
 # Dependency folders
 **/node_modules/

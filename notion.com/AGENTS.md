@@ -2,7 +2,7 @@
 
 reusable script: `C:\Users\<user>\Downloads\automata\notion.com\notion-upload-file.ps1`
 
-- args: `-PageId`, `-FilePath`, optional `-FileName`/`-ContentType`; token read from the mainframe notion profile (default `<email>`).
+- args: `-PageId`, `-FilePath`, optional `-FileName`/`-ContentType`; token read from the mainframe notion profile (default email = `NOTION_EMAIL` env or `notion.com/.env.local`, gitignored).
 - the script creates the upload object, POSTs the bytes with auth headers, and attaches the file block.
 
 ## raw flow / API gotchas (reference)

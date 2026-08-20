@@ -1,4 +1,14 @@
 import { chromium } from 'playwright';
+import { readFileSync, existsSync } from 'fs';
+
+try {
+  const p = new URL('.env.local', import.meta.url);
+  if (existsSync(p)) for (const l of readFileSync(p, 'utf8').split('\n')) {
+    const m = l.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  }
+} catch {}
+const ORIGIN = process.env.THEOLDLLM_ORIGIN || 'https://<app>.vercel.app';
 
 (async () => {
   const browser = await chromium.launch({ headless: true, args: ['--disable-blink-features=AutomationControlled','--no-sandbox'] });
@@ -17,7 +27,7 @@ import { chromium } from 'playwright';
     }
   });
   
-  await page.goto('https://<app-url>/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(ORIGIN + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(20000);
   
   // check for any turnstile token in page

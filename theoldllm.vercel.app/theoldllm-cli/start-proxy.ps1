@@ -1,7 +1,7 @@
 # TheOldLLM Proxy Launcher
 # Starts the OpenAI-compatible proxy server on localhost:3001
 
-$proxyDir = "C:\Users\<user>\Downloads\automata\theoldllm\theoldllm-cli"
+$proxyDir = Join-Path $PSScriptRoot "."
 Set-Location $proxyDir
 
 # Check port 3001 directly — more reliable than process matching
