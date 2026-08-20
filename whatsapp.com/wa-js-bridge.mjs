@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
-import { basename, extname, resolve } from "node:path";
+import { basename, extname, resolve, join } from "node:path";
 
 const DEFAULT_PORT = Number(process.env.MAINFRAME_WHATSAPP_PORT || 9231);
 const DEFAULT_WAJS_PATH =
   process.env.WA_JS_BUNDLE ||
-  "C:\\Users\\<user>\\Downloads\\mojify\\extension\\vendor\\wppconnect-wa.js";
+  join(process.env.USERPROFILE, "Downloads", "mojify", "extension", "vendor", "wppconnect-wa.js");
 
 const MIME_BY_EXT = new Map([
   [".jpg", "image/jpeg"],
