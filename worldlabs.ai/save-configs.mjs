@@ -1,7 +1,7 @@
 import { writeFileSync } from 'fs';
 
 const BASE = 'https://worldlabs.ai';
-const OUT_DIR = 'C:/Users/<user>/Downloads/automata/worldlabs.ai';
+const OUT_DIR = process.env.WORLDLABS_OUT_DIR || 'C:/Users/<user>/Downloads/automata/worldlabs.ai';
 
 const nameToSplat = {
   "Autumn": "autumn",
