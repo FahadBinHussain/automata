@@ -5,10 +5,23 @@
 # Requires: DATABASE_URL env var (Neon connection string)
 
 param(
-    [string]$StorePath = "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store"
+    [string]$StorePath = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+
+if (-not $StorePath) {
+    $StorePath = if ($env:WACLI_STORE) { $env:WACLI_STORE } else { "$env:APPDATA\mainframe\accounts\whatsapp\<your-phone-number>\store" }
+}
 
 if (-not $env:DATABASE_URL) {
     Write-Host "ERROR: set DATABASE_URL env var with your Neon connection string" -ForegroundColor Red

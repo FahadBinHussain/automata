@@ -16,7 +16,7 @@ try {
 const PORT = 7870;
 const HF_TARGET = process.env.MURMUR_WEBHOOK_URL || 'https://<murmur-space>.hf.space/wacli/webhook';
 const HF_TOKEN = process.env.HF_TOKEN || fs.readFileSync(
-  path.join(process.env.APPDATA, 'mainframe/accounts/hf/<your-email>/token'),
+  process.env.HF_TOKEN_FILE || path.join(process.env.APPDATA, 'mainframe/accounts/hf/<your-email>/token'),
   'utf8'
 ).trim();
 
