@@ -32,6 +32,29 @@ NEON_USAGE_WARNING_HOURS, HF_EMAIL (token must match the lumen bridge secret).
 first live firing 2026-08-18: Daily-BNP at 105.61 CU-h (genuinely over the
 100 CU-h free cap) — warning sent to the whatsapp test contact.
 
+**silent-delivery loss gotcha (2026-08-20)**: the bridge returns HTTP 200
+`{"status":"sent"}` even when the whatsapp send FAILED (murmur contract, see
+lumen-agent AGENTS.md) — so a warning whose send failed is recorded as sent
+in the dedup state and never re-fires. symptom: state file has the org key
+but no message arrived anywhere. cause this time: the laptop socks5-proxy
+(tailnet upstream for lumen's whatsapp, <tailscale-ip>:1080) had died, lumen's
+whatsapp websocket was down since ~06:58 local, and the 15:48 vaultwarden
+warning (90.27 CU-h, <neon-org-id>) hit the window. diagnosis:
+lumen Render logs show `bridge: whatsapp send failed: ... websocket not
+connected` right after the `automation notification` line, while the bridge
+still answered 200. recovery: (1) restart the proxy detached —
+`SOCKS5_USER=REDACTED SOCKS5_PASS=REDACTED` then
+`Start-Process ...\socks5-proxy.exe 0.0.0.0:1080 -WindowStyle Hidden`
+(creds must match Render's SOCKS_CHAIN_UPSTREAM); (2) if whatsmeow does not
+reconnect on its own (no `Dialing wss://web.whatsapp.com` lines in logs —
+its backoff can stall), trigger a Render deploy to force a fresh boot +
+tailscale rejoin; (3) the lost warning will NOT auto-resend (dedup state
+already marks the org warned) — re-send it manually with the same
+Send-NeonUsageWarning payload; (4) verify real delivery via the lumen log
+line `WhatsApp message sent via whatsmeow` (NOT the bridge 200). check
+lumen whatsapp liveness directly: `GET /api/whatsapp/groups` with the bridge
+secret — `websocket not connected` = down.
+
 ## lumen-cookie-health-watch.ps1 (VISIBLE window)
 
 murmur-task-style visible console window so the user can see the watchdog working:
