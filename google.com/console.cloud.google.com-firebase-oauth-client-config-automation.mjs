@@ -249,8 +249,8 @@ async function connectToBrowser(port, timeoutMs) {
 
 function findBrowserPath() {
   const candidates = [
-    "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1223\\chrome-win64\\chrome.exe",
-    "C:\\Users\\<user>\\AppData\\Local\\ms-playwright\\chromium-1217\\chrome-win64\\chrome.exe",
+    path.join(process.env.USERPROFILE, "AppData", "Local", "ms-playwright", "chromium-1223", "chrome-win64", "chrome.exe"),
+    path.join(process.env.USERPROFILE, "AppData", "Local", "ms-playwright", "chromium-1217", "chrome-win64", "chrome.exe"),
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
