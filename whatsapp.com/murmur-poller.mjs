@@ -15,7 +15,7 @@ try {
 const WACLI_STORE = process.env.WACLI_STORE || path.join(process.env.APPDATA, 'mainframe/accounts/whatsapp/<your-phone-number>/store');
 const HF_TARGET = process.env.MURMUR_WEBHOOK_URL || 'https://<murmur-space>.hf.space/wacli/webhook';
 const HF_TOKEN = process.env.HF_TOKEN || fs.readFileSync(
-  path.join(process.env.APPDATA, 'mainframe/accounts/hf/<your-email>/token'),
+  process.env.HF_TOKEN_FILE || path.join(process.env.APPDATA, 'mainframe/accounts/hf/<your-email>/token'),
   'utf8'
 ).trim();
 const DB_PATH = path.join(WACLI_STORE, 'wacli.db');

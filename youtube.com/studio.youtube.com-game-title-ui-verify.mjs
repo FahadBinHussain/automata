@@ -3,7 +3,12 @@
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+
+for (const line of readFileSync(join(import.meta.dirname, '.env.local'), 'utf8').split('\n')) {
+  const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+  if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+}
 
 const chromium = await loadChromium();
 
@@ -15,7 +20,7 @@ if (!manifestPath) {
 
 const profilePath =
   process.argv[3] ||
-  String.raw`${process.env.APPDATA}\mainframe\accounts\browserui\<your-email>`;
+  String.raw`${process.env.APPDATA}\mainframe\accounts\agent-browser\${process.env.AGENT_BROWSER_EMAIL || '<your-email>'}`;
 
 const headless = /^(1|true|yes)$/i.test(process.env.YOUTUBE_STUDIO_HEADLESS || "");
 const minimized = /^(1|true|yes)$/i.test(process.env.YOUTUBE_STUDIO_MINIMIZED || "");
