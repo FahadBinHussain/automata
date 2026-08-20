@@ -33,11 +33,11 @@ $pacFile = Join-Path $scriptDir "neon-pac.js"
 $pacUrl = "http://127.0.0.1:8000/neon-pac.js"
 $pacServerPort = 8000
 $inetKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-$python = "C:\Users\<user>\scoop\apps\python312\current\python.exe"
+$python = "$env:USERPROFILE\scoop\apps\python312\current\python.exe"
 
 # read current socks port from v2rayn's generated config (source of truth)
 # note: this file is YAML (with BOM), NOT json, as of 2026-08-19 - regex it.
-$configPath = "C:\Users\<user>\scoop\apps\v2rayn\current\binConfigs\config.json"
+$configPath = "$env:USERPROFILE\scoop\apps\v2rayn\current\binConfigs\config.json"
 $socksPort = '7891'
 if (Test-Path $configPath) {
     $cfgRaw = Get-Content $configPath -Raw

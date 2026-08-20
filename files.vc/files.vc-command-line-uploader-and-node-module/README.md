@@ -1,9 +1,5 @@
 # Files.vc Uploader
 
-<img src="https://<wakapi-url>/api/badge/fahad/interval:any/project:files.vc-Uploader" 
-     alt="Wakapi Time Tracking" 
-     title="Spent more than that amount of time spent on this project">
-
 A simple command-line tool and Node.js module to upload files to [files.vc](https://files.vc/).
 
 This folder preserves the useful contents of the former `files.vc-Uploader` repo inside `automata`.

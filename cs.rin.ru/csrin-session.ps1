@@ -1,7 +1,7 @@
 # csrin-session.ps1 - cs.rin.ru security-check bootstrap
 # purpose: create a reusable web session for cs.rin.ru forum (bypasses the custom nginx JS-cookie gate without a browser)
 # inputs: none ($Fresh re-forces bootstrap even if session file exists)
-# run: $s = & C:\Users\<user>\Downloads\automata\cs.rin.ru\csrin-session.ps1
+# run: $s = & $env:USERPROFILE\Downloads\automata\cs.rin.ru\csrin-session.ps1
 # behavior: GET /forum/ (401) -> extract securitytoken + securitytoken_expiration from inline JS -> add cookies ->
 #           GET /securitycheck/forum/ (302) -> session is ready; cookies valid ~24h (re-run when 401 returns)
 # gotchas: token lives in the page's JS (document.cookie = "..."), NOT a Set-Cookie header - plain IWR won't carry it.

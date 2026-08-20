@@ -1,9 +1,10 @@
 # MiWiFi (Xiaomi) router admin API helper
 # purpose: log into the MiWiFi web admin and query router APIs without a browser
 #   (device list, status, neighbor wifi scan) - protocol reverse-engineered 2026-08-18
-# router: <router-ip>, platform R4CM, firmware 3.0.23 (older LuCI-style web UI)
-# password: bitwarden vault item "router pass" (mainframe bitwarden profile
-#   <email>); web login username is always 'admin'
+# router: <router-ip> (set via ROUTER_HOST env or miwifi.com/.env.local), platform
+# R4CM, firmware 3.0.23 (older LuCI-style web UI)
+# password: bitwarden vault item "router pass" (mainframe bitwarden profile,
+# email from the mainframe helper); web login username is always 'admin'
 #
 # login protocol (from /cgi-bin/luci/web page JS, Encrypt object):
 #   1. GET https://<host>/cgi-bin/luci/web -> page embeds:
@@ -37,11 +38,21 @@
 param(
     [ValidateSet("login", "status", "devices", "wifi")]
     [string]$Action = "login",
-    [string]$RouterHost = "<router-ip>",
+    [string]$RouterHost = "",
     [string]$Password
 )
 
 $ErrorActionPreference = "Stop"
+# router IP is personal: set ROUTER_HOST env or put it in miwifi.com/.env.local
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+if (-not $RouterHost) { $RouterHost = if ($env:ROUTER_HOST) { $env:ROUTER_HOST.Trim() } else { "<router-ip>" } }
 $base = "https://${RouterHost}/cgi-bin/luci"
 
 function Get-HexSha1([string]$s) {

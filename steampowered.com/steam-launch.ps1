@@ -28,7 +28,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $CdpEval = Join-Path $ScriptDir 'steam-cdp-eval.mjs'
 $ShortcutsScript = Join-Path $ScriptDir 'steam-shortcuts.ps1'
-$SteamExe = 'C:\Users\<user>\scoop\apps\steam\current\steam.exe'
+$SteamExe = '$env:USERPROFILE\scoop\apps\steam\current\steam.exe'
 $CdpUrl = 'http://127.0.0.1:8080'
 
 function Get-ShortcutTable {

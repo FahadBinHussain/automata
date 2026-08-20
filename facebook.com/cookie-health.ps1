@@ -26,8 +26,8 @@
 #   BNP_COOKIE_REFRESH_INTERVAL_SECONDS        (default 600; -Loop only)
 #   MURMUR_HF_SPACE_URL                    - lumen bridge base URL (default
 #                                            http://127.0.0.1:8791 local lumen;
-#                                            use https://<lumen-url>
-#                                            to hit the deployed service)
+#                                            set the deployed bridge URL in
+#                                            facebook.com/.env.local)
 #   AGENT_BROWSER_EMAIL                    - FB account email for the cookie
 #                                            vault (refresher)
 #   HF_EMAIL                               - mainframe hf profile whose token
@@ -44,17 +44,19 @@
 # endpoint. env: NEON_USAGE_TABLE_SCRIPT, NEON_USAGE_CHECK_INTERVAL_SECONDS
 # (default 3600), NEON_USAGE_WARNING_HOURS (default 90),
 # NEON_USAGE_WARNING_PLATFORM (default whatsapp),
-# NEON_USAGE_WARNING_THREAD_ID (default <whatsapp-jid> — the
-# lumen test contact; messenger is not live on lumen), HF_EMAIL (default
-# <email> — token must match the lumen bridge secret).
+# NEON_USAGE_WARNING_THREAD_ID (default = the lumen whatsapp test contact,
+# set it in facebook.com/.env.local; messenger is not live on lumen),
+# HF_EMAIL (default = the mainframe hf profile for the lumen bridge, set in
+# facebook.com/.env.local — token must match the lumen bridge secret).
 # dedup state: %APPDATA%\mainframe\state\lumen-neon-usage-warnings.json.
 # Scheduled task: runs via lumen-cookie-health-watch.ps1 (visible window,
 # task "lumen-cookie-health-watch" at logon, InteractiveToken) every 30 min;
 # the old silent "lumen-cookie-health" task was deleted 2026-08-17.
 #   schtasks /query /tn "lumen-cookie-health-watch" /xml   # current definition
 #   schtasks /run /tn "lumen-cookie-health-watch"          # manual run
-# The watch window embeds MURMUR_HF_SPACE_URL=https://<lumen-url>
-# in its env; run manually without env to test the local bridge default.
+# The watch window embeds MURMUR_HF_SPACE_URL (the deployed lumen bridge URL,
+# from facebook.com/.env.local) in its env; run manually without env to test
+# the local bridge default.
 # Exit code 0 = healthy, 2 = refresh triggered, 3 = bridge down, 4 = DB error.
 
 [CmdletBinding()]
@@ -63,14 +65,26 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# machine-local overrides (never committed): .env.local next to this script.
+# holds MURMUR_HF_SPACE_URL, HF_EMAIL, NEON_USAGE_WARNING_THREAD_ID, etc.
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+
 $LogFile = if ($env:COOKIE_HEALTH_LOG) { $env:COOKIE_HEALTH_LOG } else { Join-Path $env:TEMP "lumen-cookie-health.log" }
 $BridgeUrl = if ($env:MURMUR_HF_SPACE_URL) { $env:MURMUR_HF_SPACE_URL.Trim().TrimEnd("/") } else { "http://127.0.0.1:8791" }
 $WindowM = if ($env:BNP_COOKIE_REFRESH_FAILURE_WINDOW_MINUTES) { [int]$env:BNP_COOKIE_REFRESH_FAILURE_WINDOW_MINUTES } else { 30 }
 $Threshold = if ($env:BNP_COOKIE_REFRESH_FAILURE_THRESHOLD) { [int]$env:BNP_COOKIE_REFRESH_FAILURE_THRESHOLD } else { 2 }
 $IntervalS = if ($env:BNP_COOKIE_REFRESH_INTERVAL_SECONDS) { [int]$env:BNP_COOKIE_REFRESH_INTERVAL_SECONDS } else { 600 }
 
-$Refresher = if ($env:MURMUR_COOKIE_REFRESHER_SCRIPT) { $env:MURMUR_COOKIE_REFRESHER_SCRIPT } else { "C:\Users\<user>\Downloads\murmur\scripts\murmur-cookie-refresher.mjs" }
-$BnpDb = if ($env:BNP_DB_SCRIPT) { $env:BNP_DB_SCRIPT } else { "C:\Users\<user>\Downloads\murmur\scripts\bnp-db.mjs" }
+$Refresher = if ($env:MURMUR_COOKIE_REFRESHER_SCRIPT) { $env:MURMUR_COOKIE_REFRESHER_SCRIPT } else { "$env:USERPROFILE\Downloads\murmur\scripts\murmur-cookie-refresher.mjs" }
+$BnpDb = if ($env:BNP_DB_SCRIPT) { $env:BNP_DB_SCRIPT } else { "$env:USERPROFILE\Downloads\murmur\scripts\bnp-db.mjs" }
 
 # ── Neon usage watcher config (murmur.ps1 Check-NeonUsage parity) ──────────
 # hourly check of all mainframe Neon orgs via neon-hours-table.ps1 -Json; one
@@ -79,11 +93,11 @@ $BnpDb = if ($env:BNP_DB_SCRIPT) { $env:BNP_DB_SCRIPT } else { "C:\Users\<user>\
 # bridge notifications endpoint (whatsapp test jid by default — messenger is
 # not live on lumen yet; override with NEON_USAGE_WARNING_THREAD_ID +
 # NEON_USAGE_WARNING_PLATFORM).
-$NeonUsageScript        = if ($env:NEON_USAGE_TABLE_SCRIPT) { $env:NEON_USAGE_TABLE_SCRIPT } else { "C:\Users\<user>\Downloads\mainframe\neon-hours-table.ps1" }
+$NeonUsageScript        = if ($env:NEON_USAGE_TABLE_SCRIPT) { $env:NEON_USAGE_TABLE_SCRIPT } else { "$env:USERPROFILE\Downloads\mainframe\neon-hours-table.ps1" }
 $NeonCheckIntervalS     = if ($env:NEON_USAGE_CHECK_INTERVAL_SECONDS) { [int]$env:NEON_USAGE_CHECK_INTERVAL_SECONDS } else { 3600 }
 $NeonWarningHours       = if ($env:NEON_USAGE_WARNING_HOURS) { [double]$env:NEON_USAGE_WARNING_HOURS } else { 90 }
 $NeonWarningPlatform    = if ($env:NEON_USAGE_WARNING_PLATFORM) { $env:NEON_USAGE_WARNING_PLATFORM.Trim() } else { "whatsapp" }
-$NeonWarningThreadId    = if ($env:NEON_USAGE_WARNING_THREAD_ID) { $env:NEON_USAGE_WARNING_THREAD_ID.Trim() } else { "<whatsapp-jid>" }
+$NeonWarningThreadId    = if ($env:NEON_USAGE_WARNING_THREAD_ID) { $env:NEON_USAGE_WARNING_THREAD_ID.Trim() } else { "" }
 $NeonWarningStatePath   = if ($env:NEON_USAGE_WARNING_STATE_PATH) { $env:NEON_USAGE_WARNING_STATE_PATH } else { "$env:APPDATA\mainframe\state\lumen-neon-usage-warnings.json" }
 $NeonLastCheckPath      = "$env:APPDATA\mainframe\state\lumen-neon-usage-last-check.txt"
 
@@ -95,7 +109,7 @@ function Log([string]$msg, [string]$color = "Gray") {
 
 function Get-BnpDatabaseUrl {
     if ($env:BNP_DATABASE_URL) { return $env:BNP_DATABASE_URL.Trim() }
-    $dotenv = "C:\Users\<user>\Downloads\murmur\.env"
+    $dotenv = "$env:USERPROFILE\Downloads\murmur\.env"
     if (Test-Path $dotenv) {
         $line = Get-Content $dotenv | Where-Object { $_ -match "^BNP_DATABASE_URL=" } | Select-Object -First 1
         if ($line) { return $line.Substring("BNP_DATABASE_URL=".Length).Trim().Trim('"', "'") }
@@ -198,7 +212,8 @@ function Check-CookieHealth {
 # org per period, state file keyed on the canonical yyyy-MM-dd reset date).
 
 function Get-HfToken {
-    $email = if ($env:HF_EMAIL) { $env:HF_EMAIL.Trim() } else { "<email>" }
+    $email = if ($env:HF_EMAIL) { $env:HF_EMAIL.Trim() } else { "" }
+    if (-not $email) { return "" }
     foreach ($p in @("$env:APPDATA\mainframe\accounts\hf\$email\token.txt", "$env:APPDATA\mainframe\accounts\hf\$email\token")) {
         if (Test-Path $p) { return (Get-Content $p -Raw).Trim() }
     }

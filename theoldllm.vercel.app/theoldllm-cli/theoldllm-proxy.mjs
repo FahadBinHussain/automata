@@ -14,15 +14,23 @@
 
 import http from "http";
 import { chromium } from "playwright";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { randomUUID } from "crypto";
 
+try {
+  const p = new URL(".env.local", import.meta.url);
+  if (existsSync(p)) for (const l of readFileSync(p, "utf8").split("\n")) {
+    const m = l.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+  }
+} catch {}
+
 const TOKEN_PATH = join(homedir(), ".config", "theoldllm", "token.txt");
 const PORT = process.env.PORT || 3001;
-const ORIGIN = "https://<app-url>";
-const API_URL = "https://<app-url>/api/aichat";
+const ORIGIN = process.env.THEOLDLLM_ORIGIN || "https://<app>.vercel.app";
+const API_URL = process.env.THEOLDLLM_API_URL || "https://<app>.vercel.app/api/aichat";
 
 let token;
 try {
@@ -331,7 +339,7 @@ const server = http.createServer(async (req, res) => {
           headers: {
             "Content-Type": "application/json",
             "X-Supabase-Auth": token,
-            "Referer": "https://<app-url>/",
+            "Referer": ORIGIN + "/",
           },
           body: JSON.stringify(body),
         });

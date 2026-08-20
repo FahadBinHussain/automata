@@ -62,7 +62,7 @@ Start one only if 5433 is free (redirect output so you can see the
 ```powershell
 $out = "$env:TEMP\fwd-out.txt"
 Remove-Item $out -ErrorAction SilentlyContinue
-Start-Process pwsh -ArgumentList '-NoProfile','-File','C:\Users\<user>\Downloads\automata\tools\neon-via-proton\socks5-fwd.ps1','-ListenPort','5433','-TargetHost','<neon-endpoint>.us-west-2.aws.neon.tech','-TargetPort','5432','-SocksHost','127.0.0.1','-SocksPort','7891' -RedirectStandardOutput $out -RedirectStandardError "$env:TEMP\fwd-err.txt" -WindowStyle Hidden
+Start-Process pwsh -ArgumentList '-NoProfile','-File','C:\Users\<user>\Downloads\automata\tools\neon-via-proton\socks5-fwd.ps1','-ListenPort','5433','-TargetHost','<neon-endpoint>.aws.neon.tech','-TargetPort','5432','-SocksHost','127.0.0.1','-SocksPort','7891' -RedirectStandardOutput $out -RedirectStandardError "$env:TEMP\fwd-err.txt" -WindowStyle Hidden
 Start-Sleep -Seconds 4
 Get-Content $out -Raw
 ```
@@ -76,20 +76,20 @@ is fragile in some psql 18 invocations; keyword form works):
 
 ```powershell
 $env:PGPASSWORD='<password>'
-psql "host=127.0.0.1 port=5433 user=<user> dbname=<db> sslmode=require connect_timeout=8 options='endpoint=<neon-endpoint>'" -c "SELECT 1;"
+psql "host=127.0.0.1 port=5433 user=<user> dbname=<db> sslmode=require connect_timeout=8 options='endpoint=<endpoint-id>'" -c "SELECT 1;"
 ```
 
 endpoint-id = first part of the Neon hostname, e.g. host
-`<neon-endpoint>.us-west-2.aws.neon.tech` -> `<neon-endpoint>`.
+`<neon-endpoint>.aws.neon.tech` -> `<endpoint-id>`.
 
 ## Notes
 
-- **lumen project = `<neon-endpoint>` under `<email>`**
+- **lumen project = `<endpoint-id>` under `<neon-account-email>`**
   (tables: `lumen_snapshots`, `whatsapp_sessions`). A relay to
-  `<neon-endpoint>` seen on 2026-08-18 was a different/old target -
+  `<other-endpoint-id>` seen on 2026-08-18 was a different/old target -
   don't reuse it for lumen.
 - Get the DSN/password via mainframe helper:
-  `C:\Users\<user>\Downloads\mainframe\neon-account.ps1 run <email> connection-string`
+  `C:\Users\<user>\Downloads\mainframe\neon-account.ps1 run <neon-account-email> connection-string`
   (never commit the DSN). "password authentication failed" from another
   account's password on this endpoint = wrong account, not a relay problem.
 - psql hangs = relay/mihomo layer broken (see core resurrection), NOT the

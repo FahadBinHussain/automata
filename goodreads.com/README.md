@@ -1,9 +1,5 @@
 # Goodreads Scraper
 
-<img src="https://<wakapi-url>/api/badge/fahad/interval:any/project:Goodreads-Scraper" 
-     alt="Wakapi Time Tracking" 
-     title="Spent more than that amount of time spent on this project">
-
 A Node.js library for scraping book details from Goodreads. This library extracts comprehensive information about books including title, authors, summary, genres, characters, ratings, and more.
 
 ## Features

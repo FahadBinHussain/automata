@@ -4,8 +4,16 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const WACLI_STORE = process.env.WACLI_STORE || 'C:\\Users\\<user>\\AppData\\Roaming\\mainframe\\accounts\\whatsapp\\<your-phone-number>\\store';
-const HF_TARGET = 'https://<murmur-space>/wacli/webhook';
+try {
+  const envLocal = path.join(__dirname, '.env.local');
+  if (fs.existsSync(envLocal)) for (const line of fs.readFileSync(envLocal, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  }
+} catch {}
+
+const WACLI_STORE = process.env.WACLI_STORE || path.join(process.env.APPDATA, 'mainframe/accounts/whatsapp/<your-phone-number>/store');
+const HF_TARGET = process.env.MURMUR_WEBHOOK_URL || 'https://<murmur-space>.hf.space/wacli/webhook';
 const HF_TOKEN = process.env.HF_TOKEN || fs.readFileSync(
   path.join(process.env.APPDATA, 'mainframe/accounts/hf/<your-email>/token'),
   'utf8'
@@ -44,7 +52,7 @@ function forwardToMurmur(payload) {
     const data = Buffer.from(payload);
     const sig = computeSignature(data);
     const options = {
-      hostname: '<murmur-space>',
+      hostname: process.env.MURMUR_WEBHOOK_HOST || '<murmur-space>.hf.space',
       path: '/wacli/webhook',
       method: 'POST',
       headers: {
@@ -71,7 +79,7 @@ function poll() {
       return;
     }
     db.all(
-      SELECT rowid, msg_id, ts, chat_jid, sender_jid, sender_name, text FROM messages WHERE text LIKE '/ai%' AND ts > ? ORDER BY ts ASC,
+      `SELECT rowid, msg_id, ts, chat_jid, sender_jid, sender_name, text FROM messages WHERE text LIKE '/ai%' AND ts > ? ORDER BY ts ASC`,
       [lastPollTs],
       async (err, rows) => {
         if (err) {

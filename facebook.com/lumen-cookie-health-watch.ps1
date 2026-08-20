@@ -19,8 +19,17 @@ param(
 $ErrorActionPreference = "Continue"
 
 $Host.UI.RawUI.WindowTitle = "lumen cookie-health watch"
-$env:MURMUR_HF_SPACE_URL = "https://<lumen-url>"
-$health = "C:\Users\<user>\Downloads\automata\facebook.com\cookie-health.ps1"
+# deployed lumen bridge URL comes from .env.local (see cookie-health.ps1)
+$envLocal = Join-Path $PSScriptRoot ".env.local"
+if (Test-Path $envLocal) {
+    foreach ($line in Get-Content $envLocal) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2].Trim().Trim('"', "'"), "Process")
+        }
+    }
+}
+if (-not $env:MURMUR_HF_SPACE_URL) { $env:MURMUR_HF_SPACE_URL = "http://127.0.0.1:8791" }
+$health = Join-Path $PSScriptRoot "cookie-health.ps1"
 
 Write-Host ""
 Write-Host "=== lumen cookie-health watch ===" -ForegroundColor Cyan

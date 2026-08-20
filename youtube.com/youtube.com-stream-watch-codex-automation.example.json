@@ -1,6 +1,6 @@
 {
   "email": "<your-email>",
-  "notifyThreadId": "<thread-id>",
+  "notifyThreadId": "<messenger-thread-id>",
   "recentLimit": 50,
   "lookbackDays": 14,
   "autoPublishSafeStreams": false,

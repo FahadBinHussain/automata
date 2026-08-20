@@ -24,9 +24,11 @@ runs murmur's old hourly Neon quota watcher — `neon-hours-table.ps1 -Json`
 the lumen bridge notifications endpoint (`source: neon-usage`, dedupeKey
 `neon-<hours>:<orgId>:<resetDate yyyy-MM-dd>`), dedup state
 `%APPDATA%\mainframe\state\lumen-neon-usage-warnings.json` + hourly gate marker
-`lumen-neon-usage-last-check.txt`. default target = whatsapp test jid
-<whatsapp-jid> (messenger is NOT live on lumen — murmur warned a
-messenger thread; override with NEON_USAGE_WARNING_PLATFORM/THREAD_ID). env
+`lumen-neon-usage-last-check.txt`. default target = the lumen whatsapp test
+contact (NEON_USAGE_WARNING_THREAD_ID, set in facebook.com/.env.local — the
+jid is personal data, never commit it; messenger is NOT live on lumen —
+murmur warned a messenger thread; override with
+NEON_USAGE_WARNING_PLATFORM/THREAD_ID). env
 overrides: NEON_USAGE_TABLE_SCRIPT, NEON_USAGE_CHECK_INTERVAL_SECONDS,
 NEON_USAGE_WARNING_HOURS, HF_EMAIL (token must match the lumen bridge secret).
 first live firing 2026-08-18: Daily-BNP at 105.61 CU-h (genuinely over the
@@ -37,13 +39,14 @@ first live firing 2026-08-18: Daily-BNP at 105.61 CU-h (genuinely over the
 lumen-agent AGENTS.md) — so a warning whose send failed is recorded as sent
 in the dedup state and never re-fires. symptom: state file has the org key
 but no message arrived anywhere. cause this time: the laptop socks5-proxy
-(tailnet upstream for lumen's whatsapp, <tailscale-ip>:1080) had died, lumen's
+(tailnet upstream for lumen's whatsapp) had died, lumen's
 whatsapp websocket was down since ~06:58 local, and the 15:48 vaultwarden
 warning (90.27 CU-h, <neon-org-id>) hit the window. diagnosis:
 lumen Render logs show `bridge: whatsapp send failed: ... websocket not
 connected` right after the `automation notification` line, while the bridge
-still answered 200. recovery: (1) restart the proxy detached —
-`SOCKS5_USER=REDACTED SOCKS5_PASS=REDACTED` then
+still answered 200. recovery: (1) restart the proxy detached with the socks5
+creds from facebook.com/.env.local (`SOCKS5_USER`/`SOCKS5_PASS` — never
+commit them; the one previously exposed in this doc must be rotated) then
 `Start-Process ...\socks5-proxy.exe 0.0.0.0:1080 -WindowStyle Hidden`
 (creds must match Render's SOCKS_CHAIN_UPSTREAM); (2) if whatsmeow does not
 reconnect on its own (no `Dialing wss://web.whatsapp.com` lines in logs —
