@@ -82,18 +82,16 @@ login bootstrap (one-time per account): mainframe agent-browser -> sign-in ->
 hcaptcha (invisible, retry submit may auto-pass) -> read
 `localStorage["supabase.dashboard.auth.token"]` -> store refresh token in vault.
 
-### render resource checker (LOCAL script, reverse-engineered 2026-08-22)
+### render resource checker (LOCAL script, reverse-engineered 2026-08-23)
 
 render does NOT expose CPU/RAM via its REST API (api.render.com/v1 with the
 rnd_ API key) - those live behind the dashboard's GraphQL endpoint, which
 needs the web-session idToken (NOT the API key).
 
-- auth: dashboard login (agent-browser + vault creds) -> read
-  `localStorage["render-auth"]` -> `.idToken` (rnd_, ~8 day expiry) ->
-  `Authorization: Bearer <idToken>` on `https://api.render.com/graphql`
-- the idToken must be stored in the vault (like the supabase refresh token);
-  it expires but does NOT rotate, so re-login is needed every ~8 days (or
-  refresh on use via the same flow). TBD: whether a longer-lived path exists.
+- auth: a `signIn` GraphQL mutation on api.render.com/graphql accepts
+  email+password and returns `{idToken, expiresAt}` with NO captcha - so the
+  script logs in FRESH every run from the vault password. no session token is
+  stored, so there is no 8-day expiry / refresh problem at all.
 - query (captured from dashboard network traffic):
   ```graphql
   query metrics($query: MetricsQueryInput!) {
@@ -110,12 +108,12 @@ needs the web-session idToken (NOT the API key).
   INSTANCES, DISK_USAGE, DISK_CAPACITY, DISK_READ/WRITE_THROUGHPUT, BANDWIDTH,
   ENRICHED_BANDWIDTH, HTTP_LATENCY, HTTP_REQUESTS, CONCURRENT_REQUESTS,
   ACTIVE_CONNECTIONS, CONNECTIONS_LIMIT, ...
-- measured (lumen, 2026-08-22): CPU 0.0015 (0.15% of 0.1 limit),
-  MEMORY_RSS 37.6 MB, MEMORY 56.9 MB / 512 MB limit. ~11% memory, ~1.5% CPU -
+- measured (lumen, 2026-08-23): CPU 0.0016 (1.6% of 0.1 limit),
+  MEMORY_RSS 37.7 MB, MEMORY ~57 MB / 512 MB limit. ~7-11% memory, ~1.6% CPU -
   adding watchers is trivially safe.
 - local script: `automata\render.com\render-quota.ps1` (BUILT 2026-08-23) -
-  vault-stored idToken -> metrics query -> report headroom. NOT the lumen
-  watcher - render usage is checked locally on demand.
+  per-run signIn -> metrics query -> report headroom. NOT the lumen watcher -
+  render usage is checked locally on demand.
 - helper vault items: render.com login creds (<user>@example.com owns the
   workspace; the rnd_ API key also lives in the vault under API Keys).
 
@@ -200,9 +198,6 @@ channel needed.
   or only the egress/DB watcher first
 - whether neon watcher is worth it (neon currently off after the supabase
   migration; only if a neon project returns)
-- render idToken renewal: ~8 day expiry, no rotation - schedule a re-login or
-  accept manual refresh every ~8 days (and whether a vaultwarden-side or
-  longer-lived auth path exists)
 
 ## cleanup (post-build)
 

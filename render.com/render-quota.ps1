@@ -1,14 +1,16 @@
 # render resource usage checker (reverse-engineered 2026-08-23)
 # checks CPU, memory, and bandwidth usage for a Render web service via
 # the dashboard GraphQL API (not the REST API key, which cannot access
-# metrics). the dashboard session idToken is stored in the vault.
+# metrics). uses the email+password login mutation (signIn) to get a fresh
+# idToken EVERY time - no 8-day expiry problem, no browser needed.
 #
 # flow:
-#   1. read the idToken from the mainframe vault item "dashboard.render.com"
-#      ("Dashboard Session" section, format: <idToken>|<expiresAt>)
-#   2. query https://api.render.com/graphql for CPU, MEMORY_RSS, MEMORY_LIMIT,
-#      CPU_LIMIT, DISK_USAGE, ENRICHED_BANDWIDTH
-#   3. print usage vs free-tier limits (CPU 0.1, RAM 512 MB)
+#   1. read the password from the mainframe vault item "dashboard.render.com"
+#      (the login item for <user>@example.com)
+#   2. call signIn GraphQL mutation on api.render.com/graphql ->
+#      fresh idToken (never stale)
+#   3. query metrics for CPU, MEMORY_RSS, MEMORY_LIMIT, CPU_LIMIT, etc.
+#   4. print usage vs free-tier limits (CPU 0.1, RAM 512 MB)
 #
 # usage:
 #   .\render-quota.ps1
@@ -17,13 +19,9 @@
 #
 # vault: uses the mainframe vault-secret.psm1 (Bitwarden) - must be unlocked.
 # email default <user>@example.com (lumen service owner), override with -Email.
-# the idToken lasts ~8 days (no refresh token mechanism on Render's dashboard
-# auth). when expired, re-login via agent-browser:
-#   1. edge-cdp-profile-sync.ps1 -Email <email>
-#   2. agent-browser open https://dashboard.render.com/login
-#   3. fill creds from the vault "dashboard.render.com" item
-#   4. read localStorage["render-auth"].idToken
-#   5. store in vault with Write-VaultSecretToExisting
+# the password is stored in the vault item "dashboard.render.com" (login item).
+# no session token needs to be stored or refreshed - the script logs in fresh
+# every run.
 
 param(
     [string]$ServiceId = "<service-id>",
@@ -39,17 +37,25 @@ $vaultModule = "<user-home>\Downloads\mainframe\vault-secret.psm1"
 if (-not (Test-Path $vaultModule)) { throw "vault module not found at $vaultModule" }
 Import-Module $vaultModule -Force
 
-# 1. read idToken from vault
-$vaultSession = Read-VaultSecret -Email $Email -NamePattern 'dashboard.render.com' -ValueRegex 'rnd_[A-Za-z0-9]+\|\d{4}-\d{2}-\d{2}'
-if (-not $vaultSession) { throw "no Dashboard Session (idToken) in the dashboard.render.com vault item - set it up via the agent-browser login flow first" }
-$parts = $vaultSession -split '\|', 2
-$idToken = $parts[0]
-$expiresAt = $parts[1]
+# 1. read the password from the vault login item
+$items = Get-VaultItems | Where-Object { $_.name -eq "dashboard.render.com" -and $_.login.username -eq $Email }
+if (-not $items) { throw "no vault item 'dashboard.render.com' with email $Email - add it first" }
+$password = $items.login.password
+if (-not $password) { throw "no password in the vault item - check the login credentials" }
 
-# check expiry
-$expiry = [DateTime]::Parse($expiresAt)
-if ($expiry -lt (Get-Date).ToUniversalTime()) {
-    throw "idToken expired at $expiresAt - re-login via agent-browser to dashboard.render.com/login and store the new idToken"
+# 2. call signIn mutation to get a fresh idToken
+$signInQuery = 'mutation signIn($email: String!, $password: String!) { signIn(email: $email, password: $password) { idToken expiresAt user { id email } } }'
+$signInBody = @{ operationName = 'signIn'; variables = @{ email = $Email; password = $password }; query = $signInQuery } | ConvertTo-Json -Depth 6
+
+try {
+    $r = Invoke-WebRequest -Uri 'https://api.render.com/graphql' -Method Post -Body $signInBody -Headers @{ 'Content-Type' = 'application/json' } -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 20
+    $txt = if ($r.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($r.Content) } else { [string]$r.Content }
+    $parsed = $txt | ConvertFrom-Json
+    if ($parsed.errors) { throw "signIn failed: $($parsed.errors[0].message)" }
+    $idToken = $parsed.data.signIn.idToken
+    $expiresAt = $parsed.data.signIn.expiresAt
+} catch {
+    throw "signIn mutation failed: $($_.Exception.Message)"
 }
 
 $end = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
@@ -139,7 +145,4 @@ if ($memLim -ne $null) {
 
 "  Bandwidth egress:         {0,8} MB" -f [Math]::Round($bwEgress, 1)
 "  Bandwidth ingress:        {0,8} MB" -f [Math]::Round($bwIngress, 1)
-"  idToken expires:          {0,8}" -f $expiresAt
-if ($bwEgress -gt 0) {
-    "  (free Render has no bandwidth cap for web services)"
-}
+"  (free Render has no bandwidth cap for web services)"
