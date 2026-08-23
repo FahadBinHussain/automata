@@ -232,13 +232,10 @@ channel needed.
 
 ## cleanup (post-build)
 
-once the lumen watchers are live and verified:
-
-- **neon watcher (bundled)**: it runs inside the `lumen-cookie-health-watch`
-  scheduled task today — cookie-health.ps1 calls `neon-hours-table.ps1 -Json`
-  every 30 min (murmur parity, added 2026-08-18). once lumen has its own
-  neon_usage watcher enabled, REMOVE the neon call from cookie-health.ps1
-  (the task itself stays — it still does FB cookie health).
+- **neon watcher (bundled) — DONE 2026-08-23**: the neon call was removed from
+  cookie-health.ps1 (lumen-cookie-health-watch task stays — it still does FB
+  cookie health). lumen's own neon_usage watcher (internal/notify/neonusage.go,
+  already enabled in production.yaml) is the sole neon quota watcher now.
 - local scripts stay as manual/on-demand tools (`supabase-quota.ps1`,
   `render-quota.ps1`, `neon-hours-table.ps1`, etc.) — no need to delete them.
 
