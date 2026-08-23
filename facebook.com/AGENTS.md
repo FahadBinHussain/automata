@@ -18,21 +18,16 @@ at boot, so a proxy enabled at logon keeps being used hours after ProxyEnable=0.
 the window picks up script edits on the next cycle (script files re-read per
 invocation), but a restart of the watch task is the belt-and-suspenders move.
 
-**neon usage watcher (2026-08-18, murmur parity)**: cookie-health.ps1 now also
-runs murmur's old hourly Neon quota watcher — `neon-hours-table.ps1 -Json`
-(mainframe) -> one warning per org per quota period at 90 of 100 CU-h, sent via
-the lumen bridge notifications endpoint (`source: neon-usage`, dedupeKey
-`neon-<hours>:<orgId>:<resetDate yyyy-MM-dd>`), dedup state
-`%APPDATA%\mainframe\state\lumen-neon-usage-warnings.json` + hourly gate marker
-`lumen-neon-usage-last-check.txt`. default target = the lumen whatsapp test
-contact (NEON_USAGE_WARNING_THREAD_ID, set in facebook.com/.env.local — the
-jid is personal data, never commit it; messenger is NOT live on lumen —
-murmur warned a messenger thread; override with
-NEON_USAGE_WARNING_PLATFORM/THREAD_ID). env
-overrides: NEON_USAGE_TABLE_SCRIPT, NEON_USAGE_CHECK_INTERVAL_SECONDS,
-NEON_USAGE_WARNING_HOURS, HF_EMAIL (token must match the lumen bridge secret).
-first live firing 2026-08-18: Daily-BNP at 105.61 CU-h (genuinely over the
-100 CU-h free cap) — warning sent to the whatsapp test contact.
+**neon usage watcher — REMOVED from cookie-health.ps1 (2026-08-23)**: lumen now
+runs its own neon_usage watcher (internal/notify/neonusage.go, enabled in
+config/production.yaml, NEON_ORG_API_KEY env) - the bundled hourly
+neon-hours-table.ps1 check here was the murmur-parity interim and became
+redundant. history: added 2026-08-18 (murmur parity), first live firing same
+day (Daily-BNP at 105.61 CU-h, warning to the whatsapp test contact). the
+dedup state file `%APPDATA%\mainframe\state\lumen-neon-usage-warnings.json`
+and marker `lumen-neon-usage-last-check.txt` are now orphaned (safe to delete).
+the silent-delivery gotcha below still applies to ANY bridge notification
+consumer.
 
 **silent-delivery loss gotcha (2026-08-20)**: the bridge returns HTTP 200
 `{"status":"sent"}` even when the whatsapp send FAILED (murmur contract, see
