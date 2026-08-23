@@ -1,15 +1,16 @@
-# supabase watcher + cloud quota design (2026-08-22)
+# supabase/neon watcher + cloud quota design (2026-08-22, rev 2026-08-23)
 
-status: DESIGN ONLY - not built. single source of truth = vaultwarden.
-local supabase quota script exists and works; cloud watchers are the plan.
+status: DESIGN FINALIZED. NOT BUILT. lumen holds its own tokens in its Neon
+DB; vaultwarden is NOT in the lumen flow at all (only local bootstrap + local
+agents).
 
 ---
 
 ## goal
 
-one source of truth (vaultwarden) drives quota watching for our hosted
-services. no per-service token drift between environments. local scripts and
-cloud functions read the same vault items.
+cloud quota watchers (supabase egress/DB, neon CU-hours) run inside lumen and
+alert to chat. zero staleness, scales to many accounts, nothing about the
+user's master password ever touches Render. local scripts keep working.
 
 current tracked services:
 - supabase (blindspot project <project-ref>): egress 5 GB, DB 500 MB,
@@ -22,10 +23,9 @@ current tracked services:
 
 ## part 1 - what exists now (local, working)
 
-### vault layout
+### vault layout (personal, local-only)
 
 vaultwarden item `supabase.com`:
-
 ```
 Dashboard Session
 alt.supabase.io|<refresh_token>        <- JWT path (rotates, saved back)
@@ -40,7 +40,6 @@ i5!^H$B&9e2j4                          <- (unrelated account data)
 ### local script
 
 `automata\supabase.com\supabase-quota.ps1`:
-
 1. read `Dashboard Session` from vault -> `<issuer>|<refresh_token>`
 2. `POST {issuer}/auth/v1/token?grant_type=refresh_token` -> fresh access_token
    (30 min) + ROTATED refresh_token
@@ -54,8 +53,7 @@ limits: runs only on this pc, needs vault unlocked, no scheduled alerting.
 
 ### reverse-engineered endpoint catalog
 
-source: supabase dashboard JS bundles (frontend-assets.supabase.com),
-2026-08-22.
+source: supabase dashboard JS bundles (frontend-assets.supabase.com), 2026-08-22.
 
 PAT-accessible (no login):
 - `v1/projects/{ref}/config/disk/util` - DB disk (fs_used_bytes; quota 500 MB;
@@ -119,67 +117,101 @@ needs the web-session idToken (NOT the API key).
 
 ---
 
-## part 2 - proposed cloud design (single source of truth)
+## part 2 - cloud design (FINAL: lumen owns its tokens, no vaultwarden)
 
-CHOSEN (2026-08-22): lumen + vaultwarden. NOT BUILT - waiting on more ideas.
+DECIDED 2026-08-23: lumen holds its watcher tokens in its OWN Neon DB
+(persistence DB it already has). vaultwarden is NOT part of the lumen flow.
 
-principle: vaultwarden stays the ONE source of truth. lumen holds ZERO tokens
-- no env vars for rotating secrets, nothing to drift. the token always comes
-fresh from vaultwarden and the rotated one always goes back to vaultwarden.
+### why NOT vaultwarden (rejected after deep investigation)
 
-### why lumen
+vaultwarden is zero-knowledge: every item value is encrypted, and only a
+master-password-derived key can decrypt it. there is NO way for a machine to
+read plaintext item values without holding a password:
 
-lumen (FahadBinHussain/lumen-agent, Render <service-id>) ALREADY
-ships a quota-watcher framework: `internal/notify/neonusage.go` is a faithful
-Go port of the mainframe neon watcher (per-account api keys via env var names,
-org consumption queries, threshold warnings, dedupe state per project/period,
-delivery via postWebhook -> bridge -> messenger/whatsapp/discord threads).
-a supabase watcher mirrors that file. lumen runs 24/7 on Render free tier and
-already knows how to reach the chat threads.
+- personal API key (client_credentials) -> authenticates, but returns ENCRYPTED
+  blobs (verified 2026-08-23: cipher name/password/notes + profile key/privateKey
+  all come back as `2.IV|CT|MAC` blobs). no decryption key.
+- org sharing -> items shared to a collection are encrypted with a collection
+  key that EACH MEMBER decrypts with their OWN password. works for humans, but
+  lumen would need to be a member with its OWN password (= a new watcher user
+  whose password lumen holds). possible, but adds a user + org + sharing setup
+  and still requires lumen to hold a credential.
+- Bitwarden Secrets Manager -> the right IDEA (machine tokens, no master pass)
+  but NOT implemented in vaultwarden (all /api/secrets/, /api/machine-accounts/,
+  /api/projects/, /sm/ endpoints 404 on vaultwarden 1.37.1). it's Bitwarden-cloud
+  only, which would fork secrets away from the self-hosted vault.
+- master password in lumen env -> works but puts the whole vault's decryption
+  key on Render (co-located with the encrypted data). rejected.
 
-### per-run flow
+conclusion: lumen should NOT read the vault at all.
+
+### the design (final)
+
+lumen's own Neon DB (the persistence DB it already uses for snapshots/sessions)
+gets an `app_state` table:
 
 ```
-lumen notify wakeup (every N hours)
-  -> vaultwarden: "give me the supabase refresh token"  (API-key auth)
-  -> gotrue refresh -> fresh access JWT (30 min) + rotated refresh token
+app_state (key text pk, value text, updated_at timestamptz)
+  supabase.<ref>.refresh_token     = lumen's session (self-rotating)
+  supabase.<ref>.issuer            = alt.supabase.io
+  neon.<account>.api_key           = stable
+  render.<svc>.password            = stable (if a render watcher is ever added)
+  ... one row per account per service
+```
+
+lumen reads its token rows, calls the service, and writes back any rotation.
+atomically. the supabase refresh token is lumen's OWN session credential - it
+self-rotates in lumen's DB and never needs vaultwarden.
+
+### bootstrap (one-time seed, local, master password stays on the PC)
+
+a LOCAL script (automata\supabase.com\supabase-seed-lumen.ps1):
+1. reads tokens from the local vault (master password, local only)
+2. writes them into lumen's Neon `app_state` table via lumen's DATABASE_URL
+   (or a lumen /api endpoint)
+3. thereafter lumen owns its rows; no further sync needed
+
+new accounts: add a row to `app_state` (via the same local seed script), lumen
+picks it up on the next notify tick. (lumen is a persistent process that never
+dies - it's not "picked up next run", the notify loop reads app_state every
+tick while it runs.)
+
+### per-run flow (lumen notify, every N hours)
+
+```
+supabase watcher:
+  -> read supabase.<ref>.refresh_token + issuer from lumen Neon app_state
+  -> gotrue refresh -> fresh access JWT (30 min) + ROTATED refresh token
   -> query daily-stats (egress) + disk/util (db size)
-  -> write ROTATED refresh token back to vaultwarden
-  -> alert in chat if egress > 80% of 5 GB or db > 80% of 500 MB (dedupe per
-     period, once per reset window)
+  -> write ROTATED refresh token back to app_state (atomic)
+  -> alert in chat if egress > 80% of 5 GB or db > 80% of 500 MB (dedupe
+     per period, once per reset window)
+
+neon watcher (if neon returns):
+  -> read neon.<account>.api_key from app_state
+  -> org consumption endpoint -> warn if CU-hours > 80%
 ```
 
-### token handling - no staleness
+### zero staleness
 
-- rotating secrets (supabase refresh token): read from vaultwarden, write back
-  to vaultwarden. lumen never stores it across runs. a write-back failure only
-  costs THIS run; next run reads whatever vaultwarden has.
-- stable secrets (neon api key, supabase PAT): also vaultwarden items.
-- lumen authenticates to vaultwarden via its API-key login (client_credentials
-  on /identity/connect/token), NOT the master password - scoped, isolated from
-  personal vault items.
+- rotating token (supabase refresh): lives ONLY in lumen's DB, read+written by
+  lumen every notify tick. no env var, no vault copy to drift. a write-back
+  failure costs THIS tick only; the next tick reads whatever the DB has.
+- stable tokens (neon api key, PAT): never rotate, so they cannot go stale.
 
 ### what lumen needs
 
-- new `internal/notify/supabase.go` mirroring neonusage.go: refresh flow +
-  daily-stats/disk-util queries + threshold + dedupe
-- a vaultwarden API key (env var on render, non-rotating - it's a login key)
-- a vaultwarden client helper (identity/connect/token + GET/PUT ciphers)
-- config section `notify.supabase:` (project_ref, thread_id, thresholds)
-
-### rejected alternatives (why not)
-
-- vercel functions + per-service env vars: env vars for rotating tokens go
-  stale (the whole problem this design avoids). only ONE env var could reach
-  the vault (VAULTWARDEN_API_KEY) but that means a separate app just to do
-  what lumen already does.
-- lumen env var as token holder: write-back failure = stale token = dead
-  watcher (same trap relocated).
+- `internal/notify/supabase.go` mirroring neonusage.go: app_state read/write +
+  gotrue refresh + daily-stats/disk-util queries + threshold + dedupe
+- `app_state` table in the existing persistence Neon DB (schema migration)
+- config section `notify.supabase:` (project_ref, thread_id, thresholds,
+  app_state table name)
+- the local seed script (bootstrap only)
 
 ### scheduler
 
-lumen's notify loop (existing cron-style wakeup), or vercel cron / cron-job.org
-hitting lumen's /api/automation/notifications as an external trigger. TBD.
+lumen's existing notify loop (internal ticker per poller, already built -
+notify.go). no external cron needed.
 
 ### alert channel
 
@@ -190,14 +222,13 @@ channel needed.
 
 ## open questions / not decided
 
-- lumen notify scheduling: its internal loop vs an external cron trigger
-  (vercel cron / cron-job.org) hitting the notifications endpoint
-- vaultwarden API-key scoping details (dedicated cloud-watcher user vs org,
-  exact collection permissions)
-- whether the supabase PAT + neon api key also move into lumen watchers now,
-  or only the egress/DB watcher first
+- how lumen reaches its Neon app_state: direct DATABASE_URL (already has one
+  for persistence) vs a small /api endpoint on the bridge. direct is simpler.
+- whether the supabase PAT also moves into app_state (for disk/util) or the
+  dashboard JWT covers it (disk/util works with the PAT; the JWT is only for
+  daily-stats egress). likely both rows per account.
 - whether neon watcher is worth it (neon currently off after the supabase
-  migration; only if a neon project returns)
+  migration; only if a neon project returns).
 
 ## cleanup (post-build)
 
@@ -209,12 +240,12 @@ once the lumen watchers are live and verified:
   neon_usage watcher enabled, REMOVE the neon call from cookie-health.ps1
   (the task itself stays — it still does FB cookie health).
 - local scripts stay as manual/on-demand tools (`supabase-quota.ps1`,
-  `neon-hours-table.ps1`, etc.) — no need to delete them.
+  `render-quota.ps1`, `neon-hours-table.ps1`, etc.) — no need to delete them.
 
 note: the old cron-job.org neon watchdog job `8287828` was disabled
 2026-08-20 after the supabase migration — not part of this cleanup.
 
-## gotchas (learned 2026-08-22)
+## gotchas (learned 2026-08-22/23)
 
 - supabase refresh token ROTATES on every refresh; must be saved back or the
   stored one goes stale after one use
@@ -225,3 +256,14 @@ note: the old cron-job.org neon watchdog job `8287828` was disabled
   work with the PAT
 - automation-browser login hits an invisible hcaptcha that can deadlock on
   "Signing in..." forever; retrying the submit sometimes auto-passes it
+- vaultwarden API-key client_credentials needs `device_identifier` +
+  `device_type` in the token body (else "device_identifier cannot be blank").
+  verified: it authenticates but CANNOT decrypt items (encrypted blobs).
+- vaultwarden 1.37.1 has NO Secrets Manager (all /sm/ + /api/secrets/ +
+  /api/machine-accounts/ endpoints 404).
+- render signIn mutation needs NO captcha and NO auth header - just
+  {operationName: signIn, variables: {email, password}} - perfect for
+  per-run fresh login (no token storage).
+- the vaultwarden admin panel is DISABLED (no ADMIN_TOKEN env) and the
+  register API 404s even though config says disableUserRegistration: false.
+  (relevant only if the org/watcher-user route is ever revisited.)
