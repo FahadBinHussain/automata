@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.4
+// @version      0.7.5
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1794,7 +1794,12 @@ on conflict (key) do update set
 		// .catch and flips the whole tracker to the offline banner).
 		document.querySelectorAll("ytmusic-responsive-list-item-renderer, ytmusic-queue-item-renderer").forEach((row) => {
 			try {
-				const titleLink = row.querySelector('a[href*="watch?v="], .track-title a, .track-title');
+				// greyed-out / unavailable rows have no watch?v link at all - the
+				// title is a plain yt-formatted-string in the title column, so fall
+				// back to that (id still comes from the row's video-id attr).
+				const titleLink =
+					row.querySelector('a[href*="watch?v="], .track-title a, .track-title') ||
+					row.querySelector(".title-column .title, .title-column yt-formatted-string");
 				if (!titleLink) return;
 				const id = mYTMVideoId(titleLink) || row.getAttribute("video-id");
 				if (!id) return;
