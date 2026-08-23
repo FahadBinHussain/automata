@@ -7,39 +7,70 @@ video's, e.g. `Show.S01E01.mkv` + `Show.S01E01.srt`).
 ## run
 
 ```powershell
-pip install subliminal              # one-time
+pip install subliminal          # one-time (subliminal mode)
+scoop install alass             # one-time (sync step — REQUIRED)
+
+# subliminal mode (free, no key, ~half coverage on TV packs)
 .\sub-download.ps1 "C:\path\to\video.mkv"
-.\sub-download.ps1 "C:\path\to\show-folder" -Language en
+.\sub-download.ps1 -Path "C:\path\to\show-folder" -Language en
+
+# Wyzie API mode (better coverage + release matching; needs vault key)
+.\sub-download.ps1 -Path "C:\path\to\show-folder" -WyzieKey "wyzie-..."
+
 .\sub-download.ps1 -Path "C:\vids\movie.mkv" -Force
 ```
 
 `-Path` accepts files or directories; directories are scanned recursively for
 mkv/mp4/avi/webm.
 
-## how it works
+## the pipeline (all modes)
 
-subliminal parses the show name, season, and episode number from the filename,
-then queries every configured provider (OpenSubtitles, Addic7ed, Podnapisi,
-TVSubtitles, BSPlayer, Subsource, ...) and saves the best English match as
-`<video>.srt`.
+1. **fetch** — subliminal (free providers) or Wyzie API
+2. **sanitize** — `sanitize-srt.py` strips HTML tags and fixes SRT structure
+3. **sync** — `alass` aligns the sub to the actual video audio (fingerprint),
+   fixing timing drift regardless of which release cut the sub came from
+
+This last step is what makes subs "match" — subliminal/API often return a sub
+for a *different* release of the same episode (different cut, offset timing).
+alass re-aligns it to the exact file on disk.
+
+## Wyzie API mode
+
+`sub.wyzie.io` is a free open-source subtitle-scraping API (OpenSubtitles +
+Subf2m + Subdl + more). One request returns all matches with exact release
+names, so it can pick a BluRay/BRRip sub (best for BluRay encodes).
+
+- **key**: free at `https://store.wyzie.io/redeem` (Gmail verification,
+  1,000 req/day). Store in vault as `store.wyzie.io` with `[api key]` header.
+  Never commit the key.
+- **API**: `GET https://sub.wyzie.io/search?id=<tmdb-id>&season=&episode=&language=en&format=srt&key=`
+- the script currently has a small hardcoded tmdb-id map for known shows
+  (`AgentsofSHIELD` → 1403). Add new shows there, or pass the tmdb id.
+- free tier sources = OpenSubtitles + TVSubtitles (same as subliminal free);
+  paid sources (Subf2m, Subdl) need a Pro key — better coverage if you have one.
+- the biggest win over subliminal: Wyzie returns *per-episode* subs and lets
+  you filter by release/origin, so a mis-tagged combined sub (e.g. a 107-min
+  SRT for a 44-min episode) can be avoided by picking the BluRay match.
 
 ## gotchas (verified 2026-08-22 on AoS S1-3 30nama pack)
 
-- **`opensubtitlescom` provider needs an API key** and is discarded without one
-  (`Some providers have been discarded due to unexpected errors:
-  opensubtitlescom`). With only the free providers, coverage was ~half the
-  episodes (20 of 38 AoS episodes); the rest had zero matches on any provider.
-  Adding an OpenSubtitles API key (via `--provider` config or
-  `opensubtitlescom` credentials) should close most of the gap.
+- **`opensubtitlescom` subliminal provider needs an API key** and is discarded
+  without one. With only free providers, coverage was ~half the episodes
+  (20 of 38 AoS episodes); the rest had zero matches on any provider.
+- the deprecated `opensubtitles.com` API-key route no longer works — use
+  Wyzie (above) for the OpenSubtitles data.
 - filenames like `Agents_of_SHIELD_S01E01_x265_1080p_BluRay_30nama_30NAMA.mkv`
-  are parsed correctly by subliminal (show = "Agents of S.H.I.E.L.D.", S01E01).
-- `-s`/`--single` saves without a language code suffix (clean `<video>.srt`);
-  `-f` forces re-download even when a `.srt` already exists.
-- Run the whole directory in one pass: `subliminal download -l en -f -s <files...>`.
-  Per-file retries help when a provider is temporarily rate-limited; space the
-  retries ~20s apart.
+  are parsed correctly (show = "Agents of S.H.I.E.L.D.", S01E01).
+- **subliminal's loose matching can return the WRONG sub** (e.g. a combined
+  107-min SRT for a 44-min S1E01). Always run the sanitize + alass sync, and
+  prefer Wyzie with BluRay release filter for TV packs.
+- `sanitize-srt.py` uses `utf-8-sig` read and writes clean SRT (index/timing/
+  text/blank) — this fixes files alass refuses to parse (HTML tags, empty
+  text blocks, stray `[speaking Spanish]` lines).
 - missing/partial video files (stalled torrents, EBML header parse errors from
   ffprobe) can't be subtitle-matched reliably — subtitle the files that are
   actually complete on disk.
-- the CLI is `python -m subliminal download ...` (there is no `subdl`/`subed`
-  installed on this machine; `pip install subliminal` is the toolchain).
+- the CLI is `python -m subliminal download ...` (no `subdl`/`subed` on this
+  machine; `pip install subliminal` is the toolchain).
+- verified result: 66/66 AoS S1-S3 episodes on disk now have matching synced
+  English subs (alass showed 0 bad after sync).
