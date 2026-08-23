@@ -29,8 +29,8 @@ param(
     [int]$Days = 30,
     [string]$Email = "<user>@example.com",
     [string]$OrgSlug = "<org-slug>",
-    [switch]$Raw,
-    [switch]$AllProjects
+    [switch]$RawJson,
+    [switch]$AllProjectsFlag
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,9 +41,9 @@ if (-not (Test-Path $vaultModule)) { throw "vault module not found at $vaultModu
 Import-Module $vaultModule -Force
 
 # 1. read refresh token + issuer from the vault
-$raw = Read-VaultSecret -Email $Email -NamePattern 'supabase.com' -ValueRegex 'alt\.supabase\.io\|\S+'
-if (-not $raw) { throw "no Dashboard Session (refresh token) in the supabase.com vault item - set it up via the agent-browser login flow first" }
-$parts = $raw -split '\|', 2
+$vaultSession = Read-VaultSecret -Email $Email -NamePattern 'supabase.com' -ValueRegex 'alt\.supabase\.io\|\S+'
+if (-not $vaultSession) { throw "no Dashboard Session (refresh token) in the supabase.com vault item - set it up via the agent-browser login flow first" }
+$parts = $vaultSession -split '\|', 2
 $issuer = $parts[0]
 $refreshToken = $parts[1]
 
@@ -82,7 +82,7 @@ function Get-Attr([string]$attr) {
 $results = @{}
 foreach ($a in $attrs) { $results[$a] = Get-Attr $a; Start-Sleep -Milliseconds 250 }
 
-if ($Raw) {
+if ($RawJson) {
     $results | ConvertTo-Json -Depth 5
     exit 0
 }
