@@ -3,29 +3,36 @@
 reusable script: `C:\Users\<user>\Downloads\automata\render.com\render-quota.ps1`
 
 checks a Render web service's CPU / memory / bandwidth via the DASHBOARD
-GraphQL API - the REST API key (rnd_) cannot access metrics; only the
-dashboard session idToken works (same auth wall as supabase's /platform/*).
+GraphQL API - the REST API key (rnd_) cannot access metrics. the script logs
+in fresh EVERY run via the signIn GraphQL mutation (email+password from the
+vault), so there is NO session token to store, refresh, or expire.
 
 ## script
 
 - args: `-ServiceId` (default <service-id> lumen),
   `-Email` (default <user>@example.com - lumen service owner),
   `-Hours` (lookback, default 6), `-RawJson` (dump full json).
-- flow: read idToken from vault -> query api.render.com/graphql for
+- flow: read password from the vault item `dashboard.render.com` ->
+  signIn mutation -> fresh idToken -> query api.render.com/graphql for
   CPU / MEMORY_RSS / CPU_LIMIT / MEMORY_LIMIT / ENRICHED_BANDWIDTH ->
   print usage vs free-tier limits (CPU 0.1, RAM 512 MB).
-- vault item: `dashboard.render.com` -> "Dashboard Session" section, value
-  format `<idToken>|<expiresAt>`. requires the Bitwarden vault unlocked.
-- the idToken lasts ~8 days and has NO refresh-token mechanism - re-login via
-  agent-browser when it expires (steps in the script header).
+- requires the Bitwarden vault unlocked.
 
-## reverse-engineered endpoint (2026-08-23, from the dashboard GraphQL bundle)
+## reverse-engineered endpoints (2026-08-23, from the dashboard GraphQL bundle + live traffic)
+
+### signIn (fresh login, no expiry problem)
+
+- `POST https://api.render.com/graphql`
+- body: `{"operationName":"signIn","variables":{"email":"...","password":"..."},"query":"mutation signIn($email: String!, $password: String!) { signIn(email: $email, password: $password) { idToken expiresAt user { id email } } }"}`
+- NO captcha, NO Content-Type auth header needed - just the JSON body.
+- returns `{idToken, expiresAt}` - the idToken is the session bearer for the
+  metrics query. each call logs in fresh (email+password from the vault), so
+  the 8-day expiry is moot - the script never stores an idToken.
+
+### metrics
 
 - `POST https://api.render.com/graphql` with `Authorization: Bearer <idToken>`
   (the REST API key `rnd_` gets HTTP 401 - session-only).
-- idToken source: login to dashboard.render.com, read
-  `localStorage["render-auth"]` -> `.idToken`. login credentials for
-  <user>@example.com are in the vault `dashboard.render.com` item.
 - query:
   ```graphql
   query metrics($query: MetricsQueryInput!) {
@@ -54,9 +61,6 @@ dashboard session idToken works (same auth wall as supabase's /platform/*).
 
 ## gotchas
 
-- the idToken expires (~8 days) and Render's dashboard auth has NO refresh
-  token - the script throws when expired; re-login via agent-browser and
-  update the vault value (there is no browser-free refresh).
 - `Invoke-WebRequest -UseBasicParsing` returns `.Content` as a STRING in
   PS7 (not bytes) - don't run it through [Text.Encoding]::GetString (throws).
 - `HTTP_LATENCY` / `HTTP_REQUESTS` require aggregationMethod other than NONE
@@ -64,3 +68,7 @@ dashboard session idToken works (same auth wall as supabase's /platform/*).
 - <render-acct-a>'s vault item is the FIRST `dashboard.render.com` (username match);
   <render-acct-b> has a different workspace (<render-workspace-b>) than lumen
   (<render-workspace-a>, owned by <render-acct-a>). use <render-acct-a> for lumen.
+- the signIn mutation reads the password from the vault login item - if the
+  password changes, update the vault item, no script edit needed.
+- the `Dashboard Session` vault section (idToken|expiresAt) is no longer used
+  by the script - it was replaced by per-run signIn. it can be removed.
