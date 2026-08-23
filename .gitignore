@@ -46,3 +46,4 @@ tools/agents-sync/agent-rules-sync.ps1.bak-20260615
 
 # tool build backups
 *.exe~
+supabase.com/supabase-seed-lumen.ps1
