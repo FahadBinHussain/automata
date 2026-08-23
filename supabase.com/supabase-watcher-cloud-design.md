@@ -113,9 +113,9 @@ needs the web-session idToken (NOT the API key).
 - measured (lumen, 2026-08-22): CPU 0.0015 (0.15% of 0.1 limit),
   MEMORY_RSS 37.6 MB, MEMORY 56.9 MB / 512 MB limit. ~11% memory, ~1.5% CPU -
   adding watchers is trivially safe.
-- local script plan: `automata\render.com\render-quota.ps1` mirroring the
-  supabase one (vault-stored idToken -> metrics query -> report headroom).
-  NOT the lumen watcher - render usage is checked locally on demand.
+- local script: `automata\render.com\render-quota.ps1` (BUILT 2026-08-23) -
+  vault-stored idToken -> metrics query -> report headroom. NOT the lumen
+  watcher - render usage is checked locally on demand.
 - helper vault items: render.com login creds (<user>@example.com owns the
   workspace; the rnd_ API key also lives in the vault under API Keys).
 
