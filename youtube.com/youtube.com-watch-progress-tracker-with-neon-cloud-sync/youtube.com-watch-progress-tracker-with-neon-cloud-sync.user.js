@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.5
+// @version      0.7.6
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1723,6 +1723,15 @@ on conflict (key) do update set
 		return (el.getAttribute && el.getAttribute("video-id")) || null;
 	}
 
+	function mYTFallbackId(songName, artist) {
+		// greyed-out / unplayable rows have no video-id and no watch?v link, so
+		// there is no real track id to save under. derive a stable synthetic id
+		// from artist + title so the search button still mounts (the same song in
+		// multiple lists gets the same id).
+		const raw = `${artist} - ${songName}`.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+		return raw ? `ytmusic:${raw}` : null;
+	}
+
 	function mYTMArtistFromFlex(container) {
 		// flex-columns UI: the columns live in a JSON attribute on the renderer
 		// (secondary-flex-columns="[{...}]"), not in DOM classes, so a CSS query
@@ -1761,10 +1770,21 @@ on conflict (key) do update set
 			const t = vclean(byline.textContent);
 			if (t) return t;
 		}
-		// flex-columns UI: no DOM classes for the artist anymore, parse the
-		// renderer's secondary-flex-columns JSON attribute instead.
+		// flex-columns UI: the artist lives in the renderer's
+		// secondary-flex-columns JSON attribute (playable rows) OR in the DOM
+		// secondary flex columns (greyed-out rows have no navigationEndpoint in
+		// the attr, so the JSON parse finds nothing, but the text is rendered).
 		const flex = mYTMArtistFromFlex(container);
 		if (flex) return flex;
+		const col = container.querySelector(".secondary-flex-columns .flex-column yt-formatted-string");
+		if (col) {
+			const links = Array.from(col.querySelectorAll("a"))
+				.map((a) => vclean(a.textContent))
+				.filter(Boolean);
+			if (links.length) return links.join(", ");
+			const t = vclean(col.textContent);
+			if (t) return t;
+		}
 		return "";
 	}
 
@@ -1796,16 +1816,18 @@ on conflict (key) do update set
 			try {
 				// greyed-out / unavailable rows have no watch?v link at all - the
 				// title is a plain yt-formatted-string in the title column, so fall
-				// back to that (id still comes from the row's video-id attr).
+				// back to that (id still comes from the row's video-id attr, or a
+				// synthetic id for unplayable rows that carry no id at all).
 				const titleLink =
 					row.querySelector('a[href*="watch?v="], .track-title a, .track-title') ||
 					row.querySelector(".title-column .title, .title-column yt-formatted-string");
 				if (!titleLink) return;
-				const id = mYTMVideoId(titleLink) || row.getAttribute("video-id");
-				if (!id) return;
 				const songName = vclean(titleLink.textContent) || "";
 				if (!songName) return;
-				mYTMount(row, titleLink, id, songName, mYTMArtist(row));
+				const artist = mYTMArtist(row);
+				const id = mYTMVideoId(titleLink) || row.getAttribute("video-id") || mYTFallbackId(songName, artist);
+				if (!id) return;
+				mYTMount(row, titleLink, id, songName, artist);
 			} catch (err) {
 				mlog("ytmusic row mount failed: " + String(err && err.message).slice(0, 120));
 			}
