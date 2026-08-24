@@ -3,16 +3,13 @@
 ## context / the problem (2026-08-23)
 
 dailyBNP's Neon project burned its free-tier compute quota:
-- project: `Daily-BNP` = `PROJECT_ID_REDACTED`, org `ORG_ID_REDACTED`
-- account: `ACCOUNT_EMAIL_REDACTED` (mainframe neon profile, API key in vault:
-  `Read-VaultSecret -Email 'ACCOUNT_EMAIL_REDACTED' -NamePattern 'console.neon.tech*' -ValueRegex 'napi_[A-Za-z0-9]+'`)
-- region `aws-us-east-1`, pg 17, main branch `MAIN_BRANCH_REDACTED`, db `neondb`
-- endpoint `ENDPOINT_REDACTED` (host `ENDPOINT_REDACTED.c-3.us-east-1.aws.neon.tech`,
-  compute host `ENDPOINT_REDACTED-hld...`, pooler `...-pooler.c-3...`)
-- pooler DSN (in murmur/.env + daily-bnp/.env.local):
-  `postgresql://neondb_owner:npg_REDACTED@ENDPOINT_REDACTED-pooler.c-3.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require`
-- status: **110.41 CU-h used vs 100 limit → compute SUSPENDED with 402** on every
-  connection path; storage intact 44.8 MB; period 08/01 → **09/01 00:00 UTC** reset.
+- project id, org id, account email, branch/endpoint ids: **personal values live in
+  `.env.local` next to this file** (gitignored via `**/.env.local`), NOT in this repo.
+- region `aws-us-east-1`, pg 17, database `neondb`, role `neondb_owner`
+- pooler DSN (also in murmur/.env + daily-bnp/.env.local): read from `.env.local` here
+  as `NEON_BNP_POOLER_DSN`.
+- status at 2026-08-23: **110.41 CU-h used vs 100 limit → compute SUSPENDED with 402**
+  on every connection path; storage intact 44.8 MB; period 08/01 → **09/01 00:00 UTC** reset.
 - quota is **per-project** (not per-org/account): 100 CU-h = 360,000 CU-sec bucket;
   period-bounded value comes from `GET /organizations/{org_id}/consumption` →
   `periods[last].compute_time` (CU-sec). `compute_time_seconds` on project detail is
@@ -26,19 +23,19 @@ The compute quota gate is enforced at the Neon proxy on EVERY compute-consuming 
 the pageserver) and succeeds even over quota.**
 
 ```
-POST /api/v2/projects/PROJECT_ID_REDACTED/branches
-{"branch":{"parent_id":"MAIN_BRANCH_REDACTED"}}     # NO "endpoints":[] key
-# → 201 SNAPSHOT_BRANCH_REDACTED  (parent_lsn 0/81E8578, logical_size 46948352)
+POST /api/v2/projects/{project_id}/branches
+{"branch":{"parent_id":"{main_branch_id}"}}     # NO "endpoints":[] key
+# → 201 {snapshot_branch_id}  (parent_lsn 0/81E8578, logical_size 46948352)
 ```
 
 This freezes the exact current state of the DB into a child branch without touching
 compute. Use it the moment you notice the quota is gone — always safe insurance.
 
-## branch created 2026-08-23 (still exists, do NOT delete without asking)
+## branch snapshot created 2026-08-23 (still exists, do NOT delete without asking)
 
-- `SNAPSHOT_BRANCH_REDACTED` = frozen copy of main at LSN `0/81E8578`, logical size
-  46,948,352 bytes (44.77 MB), state `ready`. Root branch `MAIN_BRANCH_REDACTED`
-  unchanged.
+- snapshot branch id (frozen copy of main at LSN `0/81E8578`, logical size
+  46,948,352 bytes = 44.77 MB, state `ready`) lives in `.env.local`
+  (`NEON_BNP_SNAPSHOT_BRANCH_ID`). Root branch unchanged.
 - this is the fallback restore point. when the period resets (or if a paid upgrade
   ever happens), create an endpoint on this branch and pg_dump it.
 
@@ -90,7 +87,7 @@ all tested live against the real project; each returned 402/412/423 quota gate u
     quota-gated but returns `password authentication failed for user 'neondb_owner'`
     for BOTH our DSN and a healthy project's DSN — it is a generic/gateway route that
     does not actually reach this tenant's compute. dead end.
-17. **legacy hostname without cell** (`ENDPOINT_REDACTED.us-east-1.aws.neon.tech`,
+17. **legacy hostname without cell** (`ep-{endpoint}.us-east-1.aws.neon.tech`,
     no `.c-3.`): DNS round-robins to other tenants, `password authentication failed`
     for every role. ignore.
 18. **endpoint PATCH branch_id move** (moved existing endpoint to frozen branch):
@@ -107,8 +104,9 @@ all tested live against the real project; each returned 402/412/423 quota gate u
 - `POST /projects/{id}/branches` (no endpoint) — the storage snapshot trick
 - `PATCH /projects/{id}/endpoints/{ep}` — settings + branch_id move (200)
 - `POST .../endpoints/{ep}/suspend` (200), `POST .../branches/{id}/set_as_default` (200)
-- role passwords ARE readable via reveal_password while frozen (neondb_owner
-  `npg_REDACTED`, authenticator `npg_REDACTED`) — but you still can't connect.
+- role passwords ARE readable via reveal_password while frozen (neondb_owner + the
+  `authenticator` role) — but you still can't connect (passwords are live creds,
+  keep them in `.env.local` / vault, never this repo).
 
 ## verdict
 
@@ -119,7 +117,7 @@ compute-gated. The storage-level branch snapshot is the ONLY compute-free data
 preservation trick. The realistic export path:
 
 **wait for the 09/01 00:00 UTC period reset → create a 0.25-CU endpoint on
-`SNAPSHOT_BRANCH_REDACTED` (or main) → pg_dump → delete the temp endpoint.**
+{snapshot_branch_id} (or main) → pg_dump → delete the temp endpoint.**
 (or `suspend` the endpoint again immediately after.)
 
 If a paid upgrade is ever considered: Launch is usage-based, no monthly minimum,
@@ -135,3 +133,16 @@ requirement before recommending (global AGENTS.md rule 12).
 - check `periods[last].period_end` each run — as soon as a NEW period starts, the
   proxy gate lifts and normal psql/pg_dump works again; the branch snapshot is then
   redundant but harmless.
+
+## .env.local (gitignored) — personal values, never commit
+
+```
+NEON_ACCOUNT_EMAIL=<mainframe neon profile email>
+NEON_PROJECT_ID=<project id>
+NEON_ORG_ID=<org id>
+NEON_MAIN_BRANCH_ID=<main branch id>
+NEON_SNAPSHOT_BRANCH_ID=<snapshot branch id>
+NEON_ENDPOINT_ID=<endpoint id>
+NEON_BNP_POOLER_DSN=<full pooled connection string incl password>
+NEON_AUTHENTICATOR_PASSWORD=<authenticator role password>
+```
