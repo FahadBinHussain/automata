@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.6
+// @version      0.7.7
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -193,9 +193,13 @@ on conflict (video_id) do update set
   finished   = excluded.finished,
   -- Store when the video was actually watched, not when the row happened to
   -- sync. Pushes are debounced and retried, so now() drifted later than
-  -- reality and could sort a row above something watched after it. greatest()
-  -- keeps the timestamp monotonic if an older queued write arrives late.
-  updated_at = greatest(watch_progress.updated_at, coalesce($7::timestamptz, now()))`;
+  -- reality and could sort a row above something watched after it. Last-write-
+  -- wins (NOT greatest()): a stale/late flush must carry its real (older)
+  -- timestamp, or it would claim the newest badge and roll everyone's position
+  -- back. greatest() kept the timestamp monotonic, but combined with LWW
+  -- position it let a behind-value write win forever - the "progress reduced
+  -- next day" bug.
+  updated_at = coalesce($7::timestamptz, now())`;
 
 	async function flush() {
 		if (!connStr() || dirty.size === 0) return 0;
@@ -327,9 +331,15 @@ on conflict (video_id) do update set
 						`merge v=${id} p ${Math.round(local.position || 0)}->${Math.round(merged.position)} d ${Math.round(local.duration || 0)}->${Math.round(merged.duration)} fin ${local.finished}->${merged.finished} base=${base === local ? "local" : "remote"}`
 					);
 				}
-				// If the merge corrected a flag that differs from what Neon has, queue
-				// the corrected row for the next flush so the DB converges too.
-				if (merged.finished !== remote.finished) {
+				// If the merge corrected anything that differs from what Neon has,
+				// queue the corrected row for the next flush so the DB converges
+				// too. Position as well as finished: a behind-value write (stale
+				// flush, teardown before 0.7.7) leaves the DB stuck low, and only
+				// a re-push of the merged truth repairs it.
+				if (
+					merged.finished !== remote.finished ||
+					Math.abs((merged.position || 0) - Number(remote.position || 0)) > 0.5
+				) {
 					dirty.add(id);
 					saveDirty();
 				}
@@ -448,8 +458,24 @@ on conflict (video_id) do update set
 		// the seek barely landed under it: otherwise the panel/launcher keeps
 		// showing the clamped landing spot (2:33:18 of 2:33:20) and the
 		// load-time re-derivation in `init` would un-finish it.
-		const finished = atEnd || wasDoneAtEnd;
-		const pos = finished ? v.duration : v.currentTime;
+		let finished = atEnd || wasDoneAtEnd;
+		let pos = finished ? v.duration : v.currentTime;
+		// Teardown writes must never lower saved progress or clear a done mark.
+		// While the page dies (unload/pagehide) the player can report a stale
+		// low currentTime, and with last-write-wins position that behind value
+		// would stick as the newest row and roll every device back (the
+		// "watched yesterday, history shows behind" bug). A real rewind happens
+		// in-session - seeked/pause/ended already wrote the lower value - so a
+		// teardown write that reads lower keeps the higher saved position, and
+		// a finished entry stays finished.
+		if ((why === "unload" || why === "pagehide") && prev) {
+			if (prev.finished) {
+				finished = true;
+				pos = v.duration;
+			} else if (v.currentTime < prev.position) {
+				pos = prev.position;
+			}
+		}
 		const changed =
 			!prev ||
 			Math.abs((prev.position || 0) - pos) > 0.5 ||
