@@ -2,6 +2,28 @@
 
 always capture both **progress** (save files) and **settings** (registry/config).
 
+## per-game engine (preferred — use this instead of ad-hoc steps)
+
+`game-save.ps1` encodes each game's durable knowledge (save dirs, registry keys, expected
+file patterns, restore steps) in `games/<game>.json`, so agents don't have to re-investigate
+per-game save locations and can't silently skip the save files (the mistake that first
+Camp With Mom backup made — only the display `.reg` was captured, real progress was in
+`NaninovelData\Saves\*.nson`).
+
+```
+.\game-save.ps1 list
+.\game-save.ps1 backup -Game campwithmom -NoUpload   # zip only, no Notion upload
+.\game-save.ps1 backup -Game campwithmom             # zip + upload to Notion page
+.\game-save.ps1 restore -Game campwithmom -Zip C:\path\campwithmom-save-backup.zip
+```
+
+- game config files live in `games\` (paths/patterns only, no personal data); the Notion
+  page id per game + NOTION_EMAIL live in `.env.local` (gitignored, keyed as `<GAME>_PAGE_ID`).
+- backup verifies `expectedFiles` exist and warns loudly if a save dir or expected file is
+  missing — a zip without them is flagged instead of silently trusted.
+- requires 7z on PATH; writes to `%TEMP%\opencode\<game>-save-backup.zip` (or `-OutDir`).
+- add a new game = drop `games/<name>.json` + add `<NAME>_PAGE_ID` to `.env.local`; no script changes.
+
 ## registry scan
 
 - search `HKCU:\SOFTWARE` for game keys and export the matching ones (achievements, unlock states, play time, and session data often live there instead of save files).
