@@ -1,0 +1,20 @@
+{
+  "name": "campwithmom",
+  "displayName": "Camp with Mom (CMP_Extend v1.01 HD)",
+  "engine": "unity-naninovel",
+  "saveDirs": [
+    {
+      "path": "%USERPROFILE%\\AppData\\LocalLow\\NTRMAN\\CampWithMomExtend\\NaninovelData\\Saves",
+      "archivePath": "NaninovelData\\Saves",
+      "expectedFiles": [ "GameSave*.nson", "GlobalSave.nson", "Settings.json" ]
+    }
+  ],
+  "registryKeys": [
+    { "key": "HKCU\\SOFTWARE\\NTRMAN\\CampWithMomExtend", "file": "CampWithMomExtend.reg" }
+  ],
+  "restoreInstructions": [
+    "Extract zip to %USERPROFILE%\\AppData\\LocalLow\\NTRMAN\\CampWithMomExtend\\ (merge NaninovelData folder, overwrite)",
+    "reg import CampWithMomExtend.reg",
+    "Continue button in-game loads GameSave001.nson"
+  ]
+}
