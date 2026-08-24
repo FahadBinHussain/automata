@@ -4,9 +4,9 @@
 # path the file restores to (env variants carry "(development)"/"(production)").
 #
 # repos are matched by their git remote URL, NOT by the local folder name
-# (folder names and GitHub slugs differ, e.g. dolby_trial_preserve vs
-# dolby-trial-preserve). env files and keys restore to their vault relative
-# path, so they don't have to live at the repo root.
+# (some folders and GitHub slugs differ, e.g. underscores vs hyphens).
+# env files and keys restore to their vault relative path, so they don't
+# have to live at the repo root.
 #
 # usage:
 #   .\env-sync.ps1                              # all repos found under Downloads
