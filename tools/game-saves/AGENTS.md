@@ -6,14 +6,26 @@ always capture both **progress** (save files) and **settings** (registry/config)
 
 The engine now lives in its own private repo: `<user-home>\Downloads\game-saves`
 (`engine/game-save.ps1`, per-game configs in `games/<slug>/game.json`). Backups go to
-GitHub Releases (one release per point-in-time, tag `<slug>-<timestamp>`).
+GitHub Releases. Every backup is categorised by **kind** so a game can hold main +
+device + mod backups side by side:
+
+| kind | tag shape | example |
+|---|---|---|
+| `main` (default) | `<slug>-<ts>` | `camp-with-mom-2026-08-24-1124` |
+| `device` | `<slug>-device-<machine>-<ts>` | `camp-with-mom-device-laptop-main-2026-08-24-1124` |
+| `mod` | `<slug>-mod-<modname>-<ts>` | `camp-with-mom-mod-rude-v2-2026-08-24-1124` |
 
 ```
-.\engine\game-save.ps1 list                            # all games
-.\engine\game-save.ps1 backup -Game camp-with-mom      # zip + manifest -> new release
+.\engine\game-save.ps1 list [-Game <slug>] [-Kind main|device|mod]   # games, or backups for one game
+.\engine\game-save.ps1 backup -Game camp-with-mom                    # main (default)
 .\engine\game-save.ps1 backup -Game camp-with-mom -Note "post-dinner save"
-.\engine\game-save.ps1 restore -Game camp-with-mom     # latest backup
-.\engine\game-save.ps1 restore -Game camp-with-mom -Tag <full-tag>
+.\engine\game-save.ps1 backup -Game camp-with-mom -Kind device        # device (auto = this machine)
+.\engine\game-save.ps1 backup -Game camp-with-mom -Kind device -DeviceName laptop-main
+.\engine\game-save.ps1 backup -Game camp-with-mom -Kind mod -ModName rude-v2
+.\engine\game-save.ps1 restore -Game camp-with-mom                    # latest MAIN backup
+.\engine\game-save.ps1 restore -Game camp-with-mom -Kind device -DeviceName laptop-main
+.\engine\game-save.ps1 restore -Game camp-with-mom -Kind mod -ModName rude-v2
+.\engine\game-save.ps1 restore -Game camp-with-mom -Tag <full-tag>    # specific backup
 ```
 
 - game identity = store URL (matches the 2ndbrain Notion collection), slug = url sanitized.
@@ -24,7 +36,11 @@ GitHub Releases (one release per point-in-time, tag `<slug>-<timestamp>`).
   real progress was in `NaninovelData\Saves\*.nson`).
 - backup verifies `expectedFiles` exist and warns loudly if a save dir or expected file is
   missing.
+- `restore` with no `-Kind` = latest **main** only — a mod/device backup can never silently
+  clobber a main playthrough. manifest records `kind`/`device`/`mod` for traceability.
 - add a new game = drop `games/<slug>/game.json` + `README.md`; no engine changes.
+- `camp-with-mom` is the fallback slug for a standalone game with no store URL (its
+  game.json `storeUrl` field holds the plain title).
 
 ## legacy (pre-repo) workflow — manual registry scan, Notion upload
 
