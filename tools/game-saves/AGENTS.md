@@ -46,7 +46,15 @@ device + mod backups side by side:
   (bug fixes, level lists, issues) kept their notes, backup blocks removed.
 - Eyes: The Horror Game backup was lost (external tmpfiles.org link expired 404).
 
-## legacy (pre-repo) workflow — manual registry scan, Notion upload
+## DO NOT USE Notion for game saves anymore (2026-08-24)
+
+**Game-save backups are repo-only from now on (`FahadBinHussain/game-saves`).** Never
+upload save backups to Notion again. Reasons: Notion has a 1-hour upload window, 5MB
+cap, and extension whitelist that blocks `.reg`/`.sav`; one backup (Eyes: The Horror
+Game) was already lost when its external tmpfiles.org link expired. The 2ndbrain game
+pages are legacy read-only notes -- do not attach backup files to them.
+
+## legacy (DEPRECATED, reference only) workflow - manual registry scan, Notion upload
 
 - search `HKCU:\SOFTWARE` for game keys and export the matching ones (achievements, unlock states, play time, and session data often live there instead of save files).
 - **don't only match root key names against the game's title** — Unity PlayerPrefs live under `HKCU\Software\<Company>\<Product>` where Company is the dev company, not the game name (The Long Drive = `Genesz\TheLongDrive`, holding distance stats + last-save pointers the saves alone don't carry).
