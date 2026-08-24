@@ -76,3 +76,28 @@ pages are legacy read-only notes -- do not attach backup files to them.
 - page name = store URL (Steam `store.steampowered.com/app/{APPID}/{game-name}`, GOG `gog.com/game/{game-name}`, otherwise the store URL or plain game name).
 - put the zip's SHA256 hash plus restore instructions (where to extract saves, which registry keys to import) in the page body.
 - upload the zip with `C:\Users\<user>\Downloads\automata\notion.com\notion-upload-file.ps1` (see the notion.com AGENTS.md for whitelist/flow).
+
+## achievements for cracked games (research 2026-08-24)
+
+cracked/repacked games replace the real steam dll with a **steam emulator** so the game thinks steam is running. these emulators can also simulate achievements locally.
+
+### emulators and achievement support
+- **Goldberg Steam Emulator** — most common. auto-generates `achievements.json`/`stats.json` from the game's own definitions, so it has the full real achievement list matching steam exactly. achievements unlock locally as you earn them, but **no popup notifications** by default (no toast/sound).
+- **SmartSteamEmu** — can show a small in-game overlay message when achievements unlock, but it's basic, not steam's toast + sound.
+- **CreamAPI** / **SteamworksFix** — just DLL replacements to bypass steam ownership checks; no achievement tracking.
+- **Steam Achievement Manager (SAM)** — force-unlock tool, but only works for owned games on steam (pointless on cracked).
+
+### popup notifications
+- **short answer**: mostly no. emulators log unlocks to local files, no steam-style popup by default.
+- **SmartSteamEmu** is the only one that can show an in-game overlay message on unlock.
+- **RetroAchievements** — real popup notifications + progress tracking, but only for emulated/retro games, not modern repacks.
+- **Playnite** (library tracker) — can show toast notifications if a connected achievement data source feeds it, but cracked games typically have nothing feeding it.
+
+### no pre-built database
+no emulator ships a pre-built database of every game's achievements. each game defines its own achievement list (ids + names) inside its `steam_api` binary, and the emulator reads that game's definitions at runtime. so the emulator has that game's full list, but only for games you actually crack.
+
+### realistic options for steam-style popups on cracked games
+- **SmartSteamEmu** overlay (basic) — works for any game the emulator supports
+- **RetroAchievements** — works for emulated retro games with real popups
+- **Playnite + plugin** — works if the game has an achievement data source
+- otherwise, need the legit steam copy for real steam notifications
