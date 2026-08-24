@@ -41,6 +41,10 @@ device + mod backups side by side:
 - add a new game = drop `games/<slug>/game.json` + `README.md`; no engine changes.
 - `camp-with-mom` is the fallback slug for a standalone game with no store URL (its
   game.json `storeUrl` field holds the plain title).
+- migrated from Notion 2ndbrain: 16 games configured, 20+ releases. the 2ndbrain game
+  pages that had backups were archived/deleted after migration; pages with extra info
+  (bug fixes, level lists, issues) kept their notes, backup blocks removed.
+- Eyes: The Horror Game backup was lost (external tmpfiles.org link expired 404).
 
 ## legacy (pre-repo) workflow — manual registry scan, Notion upload
 
