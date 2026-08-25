@@ -24,21 +24,22 @@ if (!(Test-Path $sessionDir)) {
     New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null
 }
 
-# Check if already unlocked
-try {
-    $status = bw status 2>&1 | ConvertFrom-Json
-    if ($status.status -eq "unlocked") {
-        $currentSession = $null
-        if (Test-Path $sessionFile) { $currentSession = Get-Content $sessionFile -Raw }
-        if (-not $currentSession -and $env:BW_SESSION) {
-            Set-Content -Path $sessionFile -Value $env:BW_SESSION -NoNewline
-        }
-        if (Test-Path $sessionFile) {
-            Write-Host "Bitwarden already unlocked."
+# Reuse existing session if still valid (this CLI does NOT persist unlock
+# across processes, so bare `bw status` always says locked - validate the
+# stored key instead)
+$currentSession = $null
+if (Test-Path $sessionFile) { $currentSession = Get-Content $sessionFile -Raw }
+if ($currentSession) {
+    $env:BW_SESSION = $currentSession
+    try {
+        $st = bw status 2>&1 | ConvertFrom-Json
+        if ($st.status -eq "unlocked") {
+            Write-Host "Bitwarden already unlocked (session.key valid)."
             exit 0
         }
-    }
-} catch {}
+    } catch {}
+    Remove-Item $sessionFile -Force -ErrorAction SilentlyContinue
+}
 
 $innerPath = Join-Path $PSScriptRoot 'unlock-inner.ps1'
 if (-not (Test-Path $innerPath)) {
