@@ -44,25 +44,25 @@ names, so it can pick a BluRay/BRRip sub (best for BluRay encodes).
   1,000 req/day). Store in vault as `store.wyzie.io` with `[api key]` header.
   Never commit the key.
 - **API**: `GET https://sub.wyzie.io/search?id=<tmdb-id>&season=&episode=&language=en&format=srt&key=`
-- the script currently has a small hardcoded tmdb-id map for known shows
-  (`AgentsofSHIELD` → 1403). Add new shows there, or pass the tmdb id.
+- the script currently has a small hardcoded tmdb-id map for known shows.
+  Add new shows there, or pass the tmdb id.
 - free tier sources = OpenSubtitles + TVSubtitles (same as subliminal free);
   paid sources (Subf2m, Subdl) need a Pro key — better coverage if you have one.
 - the biggest win over subliminal: Wyzie returns *per-episode* subs and lets
   you filter by release/origin, so a mis-tagged combined sub (e.g. a 107-min
   SRT for a 44-min episode) can be avoided by picking the BluRay match.
 
-## gotchas (verified 2026-08-22 on AoS S1-3 30nama pack)
+## gotchas
 
 - **`opensubtitlescom` subliminal provider needs an API key** and is discarded
   without one. With only free providers, coverage was ~half the episodes
-  (20 of 38 AoS episodes); the rest had zero matches on any provider.
+  of a TV pack; the rest had zero matches on any provider.
 - the deprecated `opensubtitles.com` API-key route no longer works — use
   Wyzie (above) for the OpenSubtitles data.
-- filenames like `Agents_of_SHIELD_S01E01_x265_1080p_BluRay_30nama_30NAMA.mkv`
-  are parsed correctly (show = "Agents of S.H.I.E.L.D.", S01E01).
+- filenames like `Show_S01E01_720p_BluRay_x264.mkv`
+  are parsed correctly.
 - **subliminal's loose matching can return the WRONG sub** (e.g. a combined
-  107-min SRT for a 44-min S1E01). Always run the sanitize + alass sync, and
+  107-min SRT for a 44-min episode). Always run the sanitize + alass sync, and
   prefer Wyzie with BluRay release filter for TV packs.
 - `sanitize-srt.py` uses `utf-8-sig` read and writes clean SRT (index/timing/
   text/blank) — this fixes files alass refuses to parse (HTML tags, empty
@@ -72,5 +72,3 @@ names, so it can pick a BluRay/BRRip sub (best for BluRay encodes).
   actually complete on disk.
 - the CLI is `python -m subliminal download ...` (no `subdl`/`subed` on this
   machine; `pip install subliminal` is the toolchain).
-- verified result: 66/66 AoS S1-S3 episodes on disk now have matching synced
-  English subs (alass showed 0 bad after sync).

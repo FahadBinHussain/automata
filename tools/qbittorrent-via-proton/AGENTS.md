@@ -14,7 +14,7 @@ torrent client).
   (YAML with UTF-8 BOM - do NOT ConvertFrom-Json; regex it. v2rayN regenerates
   this file on restart, so read the ports fresh every time, never hardcode)
 - qBittorrent proxy config: `scoop\persist\qbittorrent\profile\qBittorrent\config\qBittorrent.ini`
-  `[Network] Proxy\Type=SOCKS5 Proxy\IP=127.0.0.1 Proxy\Port=@Variant(\0\0\0\x85\x1e\xd3)` (7891)
+  `[Network] Proxy\Type=SOCKS5 Proxy\IP=127.0.0.1 Proxy\Port=@Variant(...)` (7891)
   `Proxy\Profiles\BitTorrent=true` - peer traffic only; trackers go direct
 - qBittorrent logs: `...\profile\qBittorrent\data\logs\`
 
@@ -28,17 +28,17 @@ resurrection steps the script automates (from neon-via-proton AGENTS.md "Core
 resurrection"):
 1. kill ALL stray mihomo processes, then start ONE core with ABSOLUTE paths:
    `mihomo.exe -d <binConfigs> -f <binConfigs>\config.json` (relative `-f` loads
-   a stray 16-byte `C:\Users\<user>\config.json` with wrong ports)
+   a stray `C:\Users\<user>\config.json` with wrong ports)
 2. force `PUT http://127.0.0.1:<controller>/proxies/GLOBAL` body `{"name":"PROXY"}`
    - if GLOBAL points at DIRECT, traffic egresses direct and Proton blocks it
 3. verify socks listener + `curl`-style HTTPS through socks (never `telnet://`
    through socks - hangs regardless of connectivity)
 
-## bare magnet gotcha (2026-08-20) - the actual "not downloading" fix
+## bare magnet gotcha - the actual "not downloading" fix
 
-magnets added from `yts.lt\search.ps1` / `thepiratebay.org\search.ps1` carry
-their tracker URLs in the magnet, so they bootstrap fine. but a BARE infohash
-magnet (`magnet:?xt=urn:btih:<hash>&dn=<name>`) has NO trackers, and this
+magnets added from torrent-search helpers carry their tracker URLs in the magnet,
+so they bootstrap fine. but a BARE infohash magnet
+(`magnet:?xt=urn:btih:<hash>&dn=<name>`) has NO trackers, and this
 qBittorrent has `Session\DHTEnabled=false` + `PeX/LSD` disabled - so there is
 NO way to find peers and fetch metadata. the torrent sits in `metaDL` forever
 even with a healthy relay. fix = inject public trackers per torrent via the
@@ -54,23 +54,15 @@ Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/v2/torrents/reannounce" -Metho
 - `addTrackers` takes SINGULAR `hash`; `reannounce` takes PLURAL `hashes`
 - HTTP 204 from addTrackers = SUCCESS (not a failure - 204 is the success body)
 - after ~30s the announce cycle returns peers; the torrent leaves `metaDL`
-  once it fetches metadata from a peer. verified 2026-08-20: 6 stuck magnets ->
-  peers found (13-147 per torrent), downloads started.
-
-## verified state (2026-08-20)
-
-- relay resurrected: mihomo listening on socks 7891 + controller 10813, GLOBAL ->
-  PROXY, socks egress HTTP 200, qBittorrent 5.2.1 WebUI up
-- completed-torrent peer traffic flows through the relay fine (All Hail the King
-  100%); the stall was metadata bootstrap, not peer flow
+  once it fetches metadata from a peer.
 
 ## gotchas
 
 - never run `agent-browser` / direct `mihomo.exe -f relative` from an agent bash
   tool - use relay-up.ps1 or Start-Process detached (see mainframe AGENTS.md)
-- ProtonVPN + Windscribe services run on this machine; Proton blocks non-443
-  direct egress per-process. keep relay-up.ps1 as the one-shot health check
-- qBittorrent only applies proxy to `BitTorrent` profile here (trackers direct) -
+- Proton blocks non-443 direct egress per-process; keep relay-up.ps1 as the
+  one-shot health check
+- qBittorrent only applies proxy to the `BitTorrent` profile here (trackers direct) -
   if trackers start timing out (status=4) while the relay is healthy, check
   whether `Proxy\Profiles\Tracker=true` was added and whether that breaks
   tracker UDP through socks

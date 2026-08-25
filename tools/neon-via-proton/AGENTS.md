@@ -8,13 +8,13 @@ through v2rayN's mihomo core (which is allowed to egress freely).
 ## Prerequisites
 
 - v2rayN running (scoop app `v2rayn`), mihomo core alive, socks + external
-  controller ports bound. **Do NOT trust the old 9090/7890 constants** -
+  controller ports bound. **Do NOT trust old port constants** -
   v2rayN regenerates `binConfigs/config.json` on restart and the controller
-  moved to `127.0.0.1:10813` on 2026-08-17. READ THE CURRENT PORTS:
+  can move. READ THE CURRENT PORTS:
 
   ```powershell
   Get-Content "C:\Users\<user>\scoop\apps\v2rayn\current\binConfigs\config.json" -TotalCount 12
-  # -> socks-port: 7891, external-controller: 127.0.0.1:10813 (as of 2026-08-18)
+  # -> socks-port: 7891, external-controller: 127.0.0.1:10813 (example values)
   ```
 
 - mihomo config runs in `mode: rule`, but the GLOBAL selector must point at
@@ -23,7 +23,7 @@ through v2rayN's mihomo core (which is allowed to egress freely).
 
 ## Core resurrection (when mihomo is alive but not listening)
 
-Symptom: process exists, but `Get-NetTCPConnection` shows no 7891/10813
+Symptom: process exists, but `Get-NetTCPConnection` shows no socks/controller
 listener, and psql through the relay hangs (SYN silently dropped).
 
 ```powershell
@@ -32,13 +32,13 @@ Get-Process mihomo -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process
 
 # 2. relaunch ONE core with ABSOLUTE config paths. `-f config.json` relative
 #    to CWD loads a stray C:\Users\<user>\config.json (16 bytes,
-#    `mixed-port: 7890`) that v2rayN/agents dropped there - wrong ports,
+#    `mixed-port: 7890`) that can be dropped there - wrong ports,
 #    no socks, no controller, and two cores fight over cache.db.
 Start-Process -FilePath "C:\Users\<user>\scoop\apps\v2rayn\current\bin\mihomo\mihomo.exe" `
   -ArgumentList '-d','C:\Users\<user>\scoop\apps\v2rayn\current\binConfigs','-f','C:\Users\<user>\scoop\apps\v2rayn\current\binConfigs\config.json' `
   -WindowStyle Hidden
 Start-Sleep -Seconds 8
-# verify: 7891 (socks) + controller port both listening, ONE mihomo process
+# verify: socks + controller port both listening, ONE mihomo process
 
 # 3. force GLOBAL -> PROXY on the REAL controller port:
 Invoke-WebRequest -Uri "http://127.0.0.1:10813/proxies/GLOBAL" -Method PUT `
@@ -84,33 +84,24 @@ endpoint-id = first part of the Neon hostname, e.g. host
 
 ## Notes
 
-- **lumen project = `<endpoint-id>` under `<neon-account-email>`**
-  (tables: `lumen_snapshots`, `whatsapp_sessions`). A relay to
-  `<other-endpoint-id>` seen on 2026-08-18 was a different/old target -
-  don't reuse it for lumen.
 - Get the DSN/password via mainframe helper:
   `C:\Users\<user>\Downloads\mainframe\neon-account.ps1 run <neon-account-email> connection-string`
   (never commit the DSN). "password authentication failed" from another
   account's password on this endpoint = wrong account, not a relay problem.
 - psql hangs = relay/mihomo layer broken (see core resurrection), NOT the
   database. `connect_timeout=8` turns hangs into fast errors.
-- Verified 2026-08-17 with Proton on + v2rayN/mihomo: psql SELECT works,
-  3-row lumen_snapshots upsert works. Re-verified 2026-08-18 after a core
-  resurrection: DELETE + SELECT fine.
+- a relay to a different/old endpoint id is a different target - don't reuse
+  it for the project you care about.
 
 ## Browser/extension Neon access (browser-neon-pac.ps1)
 
-**2026-08-19 correction: Proton only blocks NON-443 egress.** direct psql
-(5432) to the Neon endpoint times out on all IPs while Proton is on, but
-plain HTTPS (443) to the SAME host responds fine (`curl` -> 400, 3/3 tries)
-and the WSS 443 endpoint answers too. the extension SW connects over
-WSS/443, so it reaches Neon DIRECT with Proton on — the earlier
-"proton blocks extension SW writes" conclusion was wrong; the real culprit
-was a dead url-test node when a PAC was active. use the PAC only if 443
-ever gets blocked too (unproven), and remember: while the PAC is enabled,
-a dead socks node makes neon.tech UNREACHABLE for the browser (fetch fails,
-"Link failed: Error connecting to database") even though direct would work.
-when in doubt: disable the PAC and test direct first.
+Proton only blocks NON-443 egress: direct psql (5432) to the Neon endpoint
+times out while Proton is on, but plain HTTPS (443) to the SAME host responds
+fine and WSS/443 works too. extensions/Serverless drivers that connect over
+WSS/443 reach Neon DIRECT with Proton on. use the PAC only if 443 ever gets
+blocked too, and remember: while the PAC is enabled, a dead socks node makes
+neon.tech UNREACHABLE for the browser even though direct would work. when in
+doubt: disable the PAC and test direct first.
 
 - script: `browser-neon-pac.ps1` (`-Enable` / `-Disable` / `-Status`), PAC
   file `neon-pac.js` in this folder (SOCKS5 127.0.0.1:7891 for neon.tech,
@@ -118,12 +109,8 @@ when in doubt: disable the PAC and test direct first.
   (python http.server, started detached) - file:// PACs do NOT load in a
   normal browser session and fall back to a stale ProxyServer.
 - read the socks port from `binConfigs/config.json` by REGEX - the file is
-  YAML with a UTF-8 BOM (as of 2026-08-19), NOT json, ConvertFrom-Json fails.
-- verified 2026-08-19: headless Edge with the system PAC loads
-  console.neon.tech through socks; google loads direct; firestore.googleapis.com
-  responds. later same day: socks node dead -> neon.tech fetch failed from
-  the browser while direct curl worked -> PAC disabled, direct restored.
-- same node flakiness applies: if the PROXY url-test group sits on a dead
+  YAML with a UTF-8 BOM, NOT json, ConvertFrom-Json fails.
+- node flakiness applies: if the PROXY url-test group sits on a dead
   node, neon requests hang until it re-picks a live one - retry, don't
   rebuild anything. never diagnose with `curl telnet://` through socks (hangs
   on telnet negotiation regardless of connectivity) - use a real HTTPS

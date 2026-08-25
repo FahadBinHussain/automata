@@ -9,8 +9,8 @@ dashboard session JWT.
 
 ## script
 
-- args: `-ProjectRef` (default <project-ref>), `-Days` (lookback, default
-  30), `-Email` (default <user>@example.com), `-OrgSlug`,
+- args: `-ProjectRef` (default from env/.env.local), `-Days` (lookback, default
+  30), `-Email` (default from env/.env.local), `-OrgSlug`,
   `-RawJson` (dump full json), `-AllProjectsFlag`.
 - flow: read refresh token from vault -> refresh via gotrue (rotates the
   refresh token) -> GET /platform/projects/{ref}/daily-stats per attribute ->
@@ -22,7 +22,7 @@ dashboard session JWT.
   from the PAT (`v1/projects/{ref}/config/disk/util`); egress/MAU come from
   the daily-stats JWT endpoint.
 
-## reverse-engineered endpoints (2026-08-22, from the dashboard JS bundles)
+## reverse-engineered endpoints (from the dashboard JS bundles)
 
 all `/platform/*` paths return `401 {"message":"JWT could not be decoded"}`
 with a PAT - they need the dashboard user JWT (from
@@ -45,7 +45,7 @@ with a PAT - they need the dashboard user JWT (from
   - `v1/projects/{ref}/analytics/endpoints/usage.api-counts?interval=15min|30min|1hr|3hr|1day|3day|7day`
   - `v1/projects/{ref}/analytics/endpoints/usage.api-requests-count`
   - `v1/projects/{ref}/analytics/endpoints/functions.combined-stats`
-- DB size (PAT): `v1/projects/{ref}/config/disk/util` -> `metrics.fs_used_bytes` (dashboard "Database size"; free quota 500 MB). note raw `pg_database_size` (~11 MB) is far smaller than fs_used_bytes (~273 MB) - fs includes WAL/cluster overhead, and the quota uses fs.
+- DB size (PAT): `v1/projects/{ref}/config/disk/util` -> `metrics.fs_used_bytes` (dashboard "Database size"; free quota 500 MB). note raw `pg_database_size` is far smaller than `fs_used_bytes` - fs includes WAL/cluster overhead, and the quota uses fs.
 
 ## gotchas
 
@@ -66,7 +66,6 @@ with a PAT - they need the dashboard user JWT (from
 
 1. sync profile: `edge-cdp-profile-sync.ps1 -Email <email>`
 2. spawn: `agent-browser open https://supabase.com/dashboard/sign-in` (detached)
-3. fill creds from the `supabase.com` vault item (<user>@example.com),
-   submit; solve captcha if it appears
+3. fill creds from the `supabase.com` vault item, submit; solve captcha if it appears
 4. read `localStorage["supabase.dashboard.auth.token"]`, store the refresh
    token + issuer as "Dashboard Session" in the same vault item

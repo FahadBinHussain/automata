@@ -4,7 +4,7 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
 
 ## pick rules
 
-- **4K first, 1080p floor** (user rule, 2026-08-17): always prefer 2160p when it exists with seeds; fall back to 1080p; never below 1080p (unless nothing >=1080p exists, e.g. shorts/SD-only extras). `yts.lt\search.ps1` enforces this by default (`-Allow720` to relax).
+- **4K first, 1080p floor** (user rule): always prefer 2160p when it exists with seeds; fall back to 1080p; never below 1080p (unless nothing >=1080p exists, e.g. shorts/SD-only extras). `yts.lt\search.ps1` enforces this by default (`-Allow720` to relax).
 
 ## scripts
 
@@ -13,13 +13,13 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
   powershell -File add-torrent.ps1 -Url "magnet:?xt=urn:btih:..."
   ```
 
-## setup facts (learned 2026-08-16)
+## setup facts
 
-- installed via scoop: `qbittorrent` (5.2.1), runs with a **persisted profile**:
+- installed via scoop: `qbittorrent`, runs with a **persisted profile**:
   - exe: `C:\Users\<user>\scoop\apps\qbittorrent\current\qbittorrent.exe`
   - launch: `qbittorrent.exe --profile=C:\Users\<user>\scoop\persist\qbittorrent\profile`
   - config: `C:\Users\<user>\scoop\persist\qbittorrent\profile\qBittorrent\config\qBittorrent.ini` (5.x uses `.ini`; the old `%APPDATA%\qBittorrent\qBittorrent.conf` is **ignored** - writing WebUI settings there does nothing)
-  - downloads default to `...\profile\qBittorrent\downloads` — **user wants real downloads at `C:\Users\<user>\Downloads`** (changed 2026-08-17): set global `save_path` via `POST /api/v2/app/setPreferences` (body `json={"save_path":"C:\\Users\\<user>\\Downloads"}`), and move existing torrents with `POST /api/v2/torrents/setLocation` (form `hashes`, `location`) which relocates files on disk. `apps\qbittorrent\current\profile` is a **junction** to `persist\qbittorrent\profile`, so `--profile` and bare launches share one config.
+  - downloads default to `...\profile\qBittorrent\downloads` — to change: set global `save_path` via `POST /api/v2/app/setPreferences` (body `json={"save_path":"C:\\Users\\<user>\\Downloads"}`), and move existing torrents with `POST /api/v2/torrents/setLocation` (form `hashes`, `location`) which relocates files on disk. `apps\qbittorrent\current\profile` is a **junction** to `persist\qbittorrent\profile`, so `--profile` and bare launches share one config.
   - log: `...\profile\qBittorrent\data\logs\` (check here when WebUI won't start)
 - **WebUI is disabled by default** and 5.x refuses to enable it without credentials: log line `WebUI: Credentials are not set`. must set all of:
   ```
@@ -37,10 +37,29 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
   - `GET  /api/v2/torrents/info?hashes=<infohash>` - state, progress, save_path, seq_dl, f_l_piece_prio
   - `POST /api/v2/torrents/delete?hashes=<infohash>&deleteFiles=true` - **query-string params get dropped with "Missing required parameters" on this build; send a form body instead**: `Invoke-RestMethod -Method Post -Body @{ hashes = '<hash>'; deleteFiles = 'true' }` (hash must be lowercase or WebUI rejects).
   - `POST /api/v2/torrents/toggleSequentialDownload` + `toggleFirstLastPiecePrio` - form `hashes`; these EXIST on 5.2.1 (earlier "404" claim was wrong). **toggle flips state** - only call when `seq_dl`/`f_l_piece_prio` is currently false.
-- **sequential + first/last-piece download (2026-08-18)**: user wants BOTH on every torrent. the ini `[Preferences]` keys `SeqDL=true`/`FLPPieces=true` survive qBittorrent's own ini rewrites but are **NOT applied to WebAPI adds** on 5.2.1 (new torrents land with seq_dl=False). `add-torrent.ps1` now ensures both via the toggle endpoints after every successful add (idempotent - only toggles when false).
+- **sequential + first/last-piece download** (user rule): user wants BOTH on every torrent. the ini `[Preferences]` keys `SeqDL=true`/`FLPPieces=true` survive qBittorrent's own ini rewrites but are **NOT applied to WebAPI adds** on 5.2.1 (new torrents land with seq_dl=False). `add-torrent.ps1` now ensures both via the toggle endpoints after every successful add (idempotent - only toggles when false).
 - getting magnets: 1337xx.to mirror detail pages work with plain HTTP via `..\1337x.to\get-magnet.ps1` (search on that mirror is a honeypot - never trust it). for movie search use `..\yts.lt\search.ps1`, for games/niche `..\thepiratebay.org\search.ps1` - both have `-Add` to push straight in here.
 
-## watched-and-delete workflow gotchas (learned 2026-08-24)
+## proxy + BitTorrent gotchas
+
+- **SOCKS5/VPN proxy kills P2P**: if torrents sit in `metaDL`/`stalledDL` at 0 bytes even when trackers report healthy seed counts, and DHT `connection_status` stays `firewalled`, check for `proxy_type=SOCKS5` pointing at a VPN/proxy client (e.g. mihomo under v2rayN in `mode: global`). in global mode ALL BitTorrent traffic (tracker HTTP, UDP DHT, AND peer connections) is forced through free proxy/VPN servers, which throttle/break P2P. the dead giveaway: leechers (all at 0%) connect but **no seeder ever transfers data**.
+- **fix**: set `proxy_type=None` via `POST /api/v2/app/setPreferences` (body `json={"proxy_type":"None"}`). afterwards peer connections go direct and the swarm shows real peers. do NOT re-enable a global-mode SOCKS5 for qBittorrent without a strong reason.
+- **preference-write gotcha**: `setPreferences` must use `-ContentType 'application/x-www-form-urlencoded'` with body `json=<urlencoded>`; sending raw JSON with `-ContentType 'application/json'` returns 400 and silently no-ops.
+
+## IDM CLI for direct downloads (learned 2026-08-25)
+
+user prefers **Internet Download Manager** for direct (non-torrent) downloads, e.g. hoster/DDL links from masked-link workflows. it lives at `C:\Program Files (x86)\Internet Download Manager\IDMan.exe` (NOT scoop).
+
+```
+& "C:\Program Files (x86)\Internet Download Manager\IDMan.exe" /d "https://host/file" /p "C:\Users\<user>\Downloads" /f "name.ext" /n
+```
+
+- `/d <url>` download, `/p <dir>` save folder, `/f <name>` filename, `/n` start immediately.
+- **`/a` only queues - it does NOT start the download** (2026-08-25 gotcha: added a pixeldrain file with `/a`, IDM sat idle while an earlier curl was still writing to the same path, confusing the whole check). use `/n` (or drop `/a`) to actually start it.
+- it downloads into its own multi-part temp then renames - if a curl/other process already wrote a same-named file, IDM may appear to "not run" while the file grows. kill the other downloader first, then let IDM own the path.
+- do not `Stop-Process IDMan` casually - it persists as a long-running tray process; killing it mid-download loses the resume state. only kill the competing downloader, not IDM.
+
+## watched-and-delete workflow gotchas
 
 when a watched episode/movie file is removed from a torrent's save path, the safe sequence is:
 1. `POST /api/v2/torrents/stop` (form `hashes`) - stop the whole torrent first.
