@@ -1,6 +1,6 @@
 # 1337x automation notes
 
-status: 2026-08-17 - magnet extraction by torrent ID works fully non-UI; 1337x search itself is a honeypot, but YTS API (yify movies) and TPB/apibay cover most needs without a browser.
+status: magnet extraction by torrent ID works fully non-UI; 1337x search itself is a honeypot, but YTS API (yify movies) and TPB/apibay cover most needs without a browser.
 
 ## what works (no browser)
 
@@ -8,13 +8,13 @@ status: 2026-08-17 - magnet extraction by torrent ID works fully non-UI; 1337x s
   - the mirror serves real detail pages with plain HTTP (no cloudflare) - TUVIMEN scraped all 6.4M pages from one ip, ~60 req/s with 6 threads, no bans.
   - url format: `https://www.1337xx.to/torrent/<id>/<any-slug>/` - the slug can be anything (`x/` works), bare id 404s.
   - verify against official site: same infohash as browser-fetched page (B550A0A3... iron man 2 = identical).
-- `probe-range.ps1` - concurrent title probing over an ID window (`-StartId -EndId -Pattern -MinSeeders`), writes hits to a file. good for hunting a known release era, e.g. YIFY 2012-era films live around id 348000 (iron man 2 = 348116). category browse `/cat/Movies/1/` also works plain HTTP to read latest ids (id space currently ~6.7M).
+- `probe-range.ps1` - concurrent title probing over an ID window (`-StartId -EndId -Pattern -MinSeeders`), writes hits to a file. good for hunting a known release era. category browse `/cat/Movies/1/` also works plain HTTP to read latest ids.
 - **YTS API for YIFY movies (the bulk of 1337x movie releases)** - `..\yts.lt\search.ps1` (movie search by title, prints yts id + quality + seeds + infohash, optional `-Add` straight into qBittorrent). yts.mx is DNS-dead, yts.lt works.
 - **TPB/apibay for everything else (games, console, niche)** - `..\thepiratebay.org\search.ps1` (JSON mirror search, optional `-Add`). good for game rips (ps3/xbox360/wii) that 1337x/YTS lack.
 
 ## what does not work (as of 2026-08)
 
-- search on the 1337xx.to mirror is a honeypot: `/srch?search=`, `/sort-search/<key>/<sort>/<dir>/1/`, `/sort-category-search/...` all return the SAME 20 trending rows (spider-man, deadpool 2, etc.) regardless of query. page title reflects the query, rows don't. plain fetch and browser-UA fetch both fail.
+- search on the 1337xx.to mirror is a honeypot: `/srch?search=`, `/sort-search/<key>/<sort>/<dir>/1/`, `/sort-category-search/...` all return the SAME trending rows regardless of query. page title reflects the query, rows don't. plain fetch and browser-UA fetch both fail.
 - official 1337x.to: 403 cloudflare for all plain HTTP (search and detail pages).
 - autocomplete endpoint `https://cdn.1337x.to/cdnsuggest.php?term=` : 403.
 - r.jina.ai reader proxy on search url: cloudflare challenge page.

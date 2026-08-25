@@ -1,9 +1,9 @@
 # udrop.com storage bridge
 
-setup date: 2026-08-25. udrop (https://www.udrop.com) is backup source #2 (TeraBox is #1).
+udrop (https://www.udrop.com) is a backup source alongside TeraBox.
 
 ## account + credentials
-- vault item `udrop.com` (username `aminuhas101`, the login password is the WebDAV/API password).
+- vault item `udrop.com` (username + password; the login password is the WebDAV/API password).
 - crypt keys for the rclone remote are in that same vault item's notes as `[rclone UdropCrypt keys]`.
 
 ## rclone remotes (in `$env:USERPROFILE\scoop\apps\rclone\current\rclone.conf`)
