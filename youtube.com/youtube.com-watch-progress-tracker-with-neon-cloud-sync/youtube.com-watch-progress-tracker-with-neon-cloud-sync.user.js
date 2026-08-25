@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.7
+// @version      0.7.8
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1041,21 +1041,28 @@ on conflict (key) do update set
 	// (ytLockupViewModelContentImage), not the dashed BEM-ish names the older
 	// ytd-* renderers used. Keep both so home/search/sidebar all work.
 	const THUMB_SEL = [
-		"a#thumbnail[href*='/watch?v=']",
-		"a.ytd-thumbnail[href*='/watch?v=']",
-		"a.ytLockupViewModelContentImage[href*='/watch?v=']",
-		"a.yt-lockup-view-model-wiz__content-image[href*='/watch?v=']",
+		"a#thumbnail[href*='/watch?v='], a#thumbnail[href*='/shorts/']",
+		"a.ytd-thumbnail[href*='/watch?v='], a.ytd-thumbnail[href*='/shorts/']",
+		"a.ytLockupViewModelContentImage[href*='/watch?v='], a.ytLockupViewModelContentImage[href*='/shorts/']",
+		"a.yt-lockup-view-model-wiz__content-image[href*='/watch?v='], a.yt-lockup-view-model-wiz__content-image[href*='/shorts/']",
 	].join(",");
 
 	function idFromHref(href) {
 		try {
-			return new URL(href, location.origin).searchParams.get("v");
+			const u = new URL(href, location.origin);
+			const v = u.searchParams.get("v");
+			if (v) return v;
+			const m = /^\/shorts\/([^/?#]+)/.exec(u.pathname);
+			return m ? m[1] : null;
 		} catch {
 			return null;
 		}
 	}
 
 	function retime(a, id, e) {
+		// Only regular watch links can honour a t= resume; shorts links get the
+		// progress bar but clicking goes to the shorts player which ignores t=.
+		if (!(a.getAttribute("href") || "").includes("/watch?v=")) return;
 		const secs = Math.round(e.position);
 		const dur = e.duration || 0;
 		// Our timestamp must win over YouTube's own resume link. A t= exactly at
