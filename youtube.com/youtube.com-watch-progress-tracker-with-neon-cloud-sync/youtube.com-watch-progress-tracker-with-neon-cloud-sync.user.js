@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.8
+// @version      0.7.9
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1059,10 +1059,26 @@ on conflict (key) do update set
 		}
 	}
 
+	// True only for real watch links, whatever href shape YouTube hands out.
+	// The playlist (Watch Later) page renders thumbnails as RELATIVE hrefs
+	// ("watch?v=X&list=WL", no leading slash) while the history page uses
+	// "/watch?v=X" - a raw string match on "/watch?v=" missed the relative
+	// form, so the t= stamp silently never got written there (the bar still
+	// painted because idFromHref parses the URL properly). Resolve against
+	// origin and compare the pathname instead of matching text.
+	function isWatchHref(href) {
+		try {
+			const u = new URL(href, location.origin);
+			return u.pathname === "/watch";
+		} catch {
+			return false;
+		}
+	}
+
 	function retime(a, id, e) {
 		// Only regular watch links can honour a t= resume; shorts links get the
 		// progress bar but clicking goes to the shorts player which ignores t=.
-		if (!(a.getAttribute("href") || "").includes("/watch?v=")) return;
+		if (!isWatchHref(a.getAttribute("href") || "")) return;
 		const secs = Math.round(e.position);
 		const dur = e.duration || 0;
 		// Our timestamp must win over YouTube's own resume link. A t= exactly at
@@ -1162,11 +1178,9 @@ on conflict (key) do update set
 			const path = ev.composedPath ? ev.composedPath() : [];
 			const a =
 				path.find(
-					(n) =>
-						n &&
-						n.tagName === "A" &&
-						(n.getAttribute?.("href") || "").includes("/watch?v="),
-				) || ev.target?.closest?.("a[href*='/watch?v=']");
+					(n) => n && n.tagName === "A" && isWatchHref(n.getAttribute?.("href") || ""),
+				) || ev.target?.closest?.("a");
+			if (!a || !isWatchHref(a.getAttribute("href") || "")) return;
 			if (!a) return;
 			const href = a.getAttribute("href") || "";
 			const id = idFromHref(href);
