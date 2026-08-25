@@ -1,6 +1,6 @@
 # cs.rin.ru (Steam Underground) - local automation notes
 
-## access model (verified 2026-08-13)
+## access model
 - NOT Cloudflare. custom nginx JS-cookie gate: 401 page whose inline JS sets `securitytoken` + `securitytoken_expiration` (24h) cookies and redirects to `/securitycheck/<path>`. bypass = extract token from 401 body -> send as cookie -> GET /securitycheck/forum/ -> 302 -> session ready. no browser, no JS engine.
 - `feed.php` is WHITELISTED: global `feed.php`, per-forum `feed.php?f=10`, per-topic `feed.php?t=67450` -> 200 Atom, zero challenge, no login.
 - guests can browse forums/topics/search; ONLY download links hidden ("[Please login to see this link.]" - "link_removed" class).
@@ -19,4 +19,3 @@
 - viewtopic pagination: `start=N`, 15 posts/page; "Page 1 of N" in pagination bar; no flood control but pace ~1 req/2s.
 - topic search results (`search.php?keywords=..&t=<id>`) return POST links (viewtopic.php?p=), global search returns TOPIC links (class="topictitle" with nested <span> tag markup - strip tags from titles).
 - feed.php content for guests strips links; authors/timestamps/text/version numbers all visible. login only gains the actual file links.
-- RUNE crack for GTA V Legacy v1.0.3889.0 = `Grand.Theft.Auto.V.Legacy.v1.0.3889.0-RUNE` (scene, Jul 2026); Goldberg/Socialclub emu does NOT work on this build (DRM updated); crack-only exists in thread (~p3557198 area, LikeAG6 info post points to kVAL uploads page).

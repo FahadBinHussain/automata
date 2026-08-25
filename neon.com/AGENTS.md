@@ -1,15 +1,13 @@
-# neon.com - free-tier compute quota bypass research + export tooling
+# neon.com - free-tier compute quota behavior + export tooling
 
-## context / the problem (2026-08-23)
+## context / the problem
 
-dailyBNP's Neon project burned its free-tier compute quota:
+When a Neon project burns its free-tier compute quota, every compute-consuming path
+returns a 402/412/423 gate ("compute time quota exceeded"). Storage stays intact; the
+quota resets at the end of the billing period.
+
 - project id, org id, account email, branch/endpoint ids: **personal values live in
   `.env.local` next to this file** (gitignored via `**/.env.local`), NOT in this repo.
-- region `aws-us-east-1`, pg 17, database `neondb`, role `neondb_owner`
-- pooler DSN (also in murmur/.env + daily-bnp/.env.local): read from `.env.local` here
-  as `NEON_BNP_POOLER_DSN`.
-- status at 2026-08-23: **110.41 CU-h used vs 100 limit → compute SUSPENDED with 402**
-  on every connection path; storage intact 44.8 MB; period 08/01 → **09/01 00:00 UTC** reset.
 - quota is **per-project** (not per-org/account): 100 CU-h = 360,000 CU-sec bucket;
   period-bounded value comes from `GET /organizations/{org_id}/consumption` →
   `periods[last].compute_time` (CU-sec). `compute_time_seconds` on project detail is
@@ -18,9 +16,9 @@ dailyBNP's Neon project burned its free-tier compute quota:
 ## the trick that WORKS while frozen: storage-level branch snapshot
 
 The compute quota gate is enforced at the Neon proxy on EVERY compute-consuming path
-(all return 402/412/423 "compute time quota exceeded; usage:N, limit:396000"). BUT
-**branch creation with NO endpoint is a pure storage-layer operation (copy-on-write in
-the pageserver) and succeeds even over quota.**
+(all return 402/412/423). BUT **branch creation with NO endpoint is a pure
+storage-layer operation (copy-on-write in the pageserver) and succeeds even over
+quota.**
 
 ```
 POST /api/v2/projects/{project_id}/branches
@@ -29,72 +27,28 @@ POST /api/v2/projects/{project_id}/branches
 ```
 
 This freezes the exact current state of the DB into a child branch without touching
-compute. Use it the moment you notice the quota is gone — always safe insurance.
+compute. Use it the moment the quota is gone — always safe insurance. Keep the
+snapshot branch id in `.env.local`; don't delete it until the restore is done.
 
-## branch snapshot created 2026-08-23 (still exists, do NOT delete without asking)
+## verified dead ends (free tier) — do NOT re-try these
 
-- snapshot branch id (frozen copy of main at LSN `0/81E8578`, logical size
-  46,948,352 bytes = 44.77 MB, state `ready`) lives in `.env.local`
-  (`NEON_BNP_SNAPSHOT_BRANCH_ID`). Root branch unchanged.
-- this is the fallback restore point. when the period resets (or if a paid upgrade
-  ever happens), create an endpoint on this branch and pg_dump it.
+all tested against a real project while over quota; each returned 402/412/423 unless noted:
 
-## verified dead ends (as of 2026-08-23) — do NOT re-try these
-
-all tested live against the real project; each returned 402/412/423 quota gate unless noted:
-
-1. **psql pooler** (`...-pooler...:5432`): `ERROR: Your account or project has exceeded the compute time quota`.
-2. **psql direct** (`ep-...c-3...:5432`): same 402.
-3. **psql compute host** (`ep-...-hld.c-3...`): same 402.
-4. **serverless driver wss** (`@neondatabase/serverless`, wss pooler): 402.
-5. **serverless HTTP driver** `api.c-3.us-east-1.aws.neon.tech/sql` (Neon-Connection-String
-   header): 402. **`apiauth.c-3.../sql`** (JWT auth variant) is NOT quota-gated (returns
-   400 auth errors) but requires a valid JWT validated against a registered JWKS.
-6. **Data API `.apirest` route** (`ep-...-hld.apirest.../neondb/rest/v1`): NOT quota-gated
-   (400 "missing auth"/"password auth failed for authenticator") but it is a GENERIC
-   response — identical on a healthy project with NO Data API enabled — so it is NOT a
-   live-compute signal and NOT usable without enabling Data API (enable is 412-gated).
-7. **neonauth (Managed Better Auth)** (`ep-...neonauth.../neondb/auth/*`): every route
-   returns 500 `Cannot read properties of undefined (reading 'Symbol(pino.msgPrefix)')`
-   — the Better Auth service is provisioned but broken server-side; cannot mint a JWT.
-8. **JWKS registration** `POST /projects/{id}/jwks` (needed to make apiauth/.apirest
-   accept our own signed JWTs): 423 compute-gated. We generated RSA2048 keys, hosted
-   the JWKS on a private GitHub gist, tried `provider_name`+`branch_id` variants — all
-   423. (First attempt returned 400 "invalid JWKS" only because the gist was deleted;
-   with a live gist it's 423.)
-9. **role password reset** `POST .../roles/{name}/reset_password` (neondb_owner AND
-   authenticator): 423. Could not rotate authenticator to match the Data API's cached
-   (stale) authenticator password.
-10. **role create** on main branch: 423; on the no-endpoint frozen branch: 404
-    "no read-write endpoint for branch".
-11. **endpoint create** on any branch: 423. **endpoint start/restart**: 423.
-12. **branch create WITH endpoint** (`endpoints:[{type:read_write}]`): 423. (without
-    endpoint: 201, see above.)
-13. **Data API enable/config** `POST/PATCH/DELETE /data-api/neondb` on main: 412;
-    on frozen branch with no endpoint: 500 "unknown internal server error"; with an
-    endpoint moved onto the frozen branch: 412. Data API is genuinely compute-gated.
-14. **branch restore / time-travel** `POST .../branches/{id}/restore`:
-    - with `preserve_under_name`: 400 `timestamp is before retention window` (free =
-      6h retention, anything older than 6h rejected).
-    - with `source_branch_id == branch id` + `target_timestamp`: 400 "target_lsn or
-      target_timestamp required when branch is reset to itself" (API wants
-      `source_timestamp`/`source_lsn` naming; retried — still 400 field mismatch).
-    - even a valid restore would only create another storage branch; read still gated.
-15. **snapshot create** `POST /projects/{id}/snapshots`: 405 (wrong route shape; the
-    real route is `POST /projects/{id}/branches/{branch_id}/snapshot` — not retried;
-    free plan allows 1 manual snapshot, but restore of a snapshot still needs compute).
-16. **region-level HTTP SQL** `api.us-east-1.aws.neon.tech/sql` (no cell): NOT
-    quota-gated but returns `password authentication failed for user 'neondb_owner'`
-    for BOTH our DSN and a healthy project's DSN — it is a generic/gateway route that
-    does not actually reach this tenant's compute. dead end.
-17. **legacy hostname without cell** (`ep-{endpoint}.us-east-1.aws.neon.tech`,
-    no `.c-3.`): DNS round-robins to other tenants, `password authentication failed`
-    for every role. ignore.
-18. **endpoint PATCH branch_id move** (moved existing endpoint to frozen branch):
-    **SUCCEEDED (200)** — control-plane op, not gated. But compute still 402 when
-    connecting (gate is project-wide, not per-endpoint). endpoint was moved back to
-    main after testing.
-19. **consumption_limits route**: 404 (does not exist on free v3).
+1. **psql pooler / direct / compute host**: 402 on all three connection paths.
+2. **serverless driver wss** (`@neondatabase/serverless`, wss pooler): 402.
+3. **serverless HTTP driver** `api.c-3.us-east-1.aws.neon.tech/sql` (Neon-Connection-String header): 402. **`apiauth.c-3.../sql`** (JWT auth variant) is NOT quota-gated (returns 400 auth errors) but requires a valid JWT validated against a registered JWKS.
+4. **Data API `.apirest` route**: NOT quota-gated (400 "missing auth"/"password auth failed for authenticator") but it is a GENERIC response — identical on a healthy project with NO Data API enabled — so it is NOT a live-compute signal and NOT usable without enabling Data API (enable is 412-gated).
+5. **neonauth (Managed Better Auth)**: every route returns 500 (pino/symbol error) — the Better Auth service can be provisioned but broken server-side; cannot mint a JWT.
+6. **JWKS registration** `POST /projects/{id}/jwks` (needed to make apiauth/.apirest accept self-signed JWTs): 423 compute-gated.
+7. **role password reset** `POST .../roles/{name}/reset_password`: 423. Could not rotate authenticator to match the Data API's cached (stale) authenticator password.
+8. **role create**: 423 on main; 404 "no read-write endpoint for branch" on a no-endpoint frozen branch.
+9. **endpoint create / start / restart**: 423. **branch create WITH endpoint**: 423 (without endpoint: 201, see above).
+10. **Data API enable/config** `POST/PATCH/DELETE /data-api/neondb` on main: 412; on a no-endpoint frozen branch: 500; with an endpoint moved onto the frozen branch: 412. genuinely compute-gated.
+11. **branch restore / time-travel** `POST .../branches/{id}/restore`: free tier has ~6h retention so older timestamps are rejected; a self-restore needs `source_timestamp`/`source_lsn` naming. even a valid restore only creates another storage branch; read still gated.
+12. **snapshot create**: the real route is `POST /projects/{id}/branches/{branch_id}/snapshot` (the plain `/snapshots` shape is wrong); free plan allows 1 manual snapshot, but restoring one still needs compute.
+13. **region-level HTTP SQL** `api.us-east-1.aws.neon.tech/sql` (no cell) and **legacy hostname without cell**: NOT quota-gated but return `password authentication failed` — generic gateway routes that don't reach this tenant's compute. dead ends.
+14. **endpoint PATCH branch_id move**: **SUCCEEDED (200)** — control-plane op, not gated. But compute still 402 when connecting (gate is project-wide, not per-endpoint). move it back after testing.
+15. **consumption_limits route**: 404 (does not exist on free).
 
 ## control-plane ops that DO work while frozen (metadata only)
 
@@ -104,24 +58,21 @@ all tested live against the real project; each returned 402/412/423 quota gate u
 - `POST /projects/{id}/branches` (no endpoint) — the storage snapshot trick
 - `PATCH /projects/{id}/endpoints/{ep}` — settings + branch_id move (200)
 - `POST .../endpoints/{ep}/suspend` (200), `POST .../branches/{id}/set_as_default` (200)
-- role passwords ARE readable via reveal_password while frozen (neondb_owner + the
-  `authenticator` role) — but you still can't connect (passwords are live creds,
-  keep them in `.env.local` / vault, never this repo).
+- role passwords ARE readable via reveal_password while frozen — but you still can't connect (passwords are live creds, keep them in `.env.local` / vault, never this repo).
 
 ## verdict
 
-No read/export path exists while the project is over its compute quota — Neon enforces
+No read/export path exists while a project is over its compute quota — Neon enforces
 the 402 at the proxy before compute starts, and every auth-gated route that bypasses
 the proxy gate (apiauth/.apirest) needs a JWKS registration that is itself
 compute-gated. The storage-level branch snapshot is the ONLY compute-free data
 preservation trick. The realistic export path:
 
-**wait for the 09/01 00:00 UTC period reset → create a 0.25-CU endpoint on
-{snapshot_branch_id} (or main) → pg_dump → delete the temp endpoint.**
-(or `suspend` the endpoint again immediately after.)
+**wait for the next period reset → create a small-CU endpoint on the snapshot branch
+(or main) → pg_dump → delete the temp endpoint (or suspend it immediately after).**
 
 If a paid upgrade is ever considered: Launch is usage-based, no monthly minimum,
-~$0.106/CU-h — a 5-minute dump at 0.25 CU ≈ pennies. flag the payment-method
+~$0.106/CU-h — a short dump at 0.25 CU ≈ pennies. flag the payment-method
 requirement before recommending (global AGENTS.md rule 12).
 
 ## future hints worth a quick re-test when time passes
@@ -129,7 +80,7 @@ requirement before recommending (global AGENTS.md rule 12).
 - neonauth pino bug may be fixed server-side (would unblock Better Auth → mint real
   JWT → Data API/apiauth becomes a live read path even over quota).
 - `POST /projects/{id}/branches/{branch_id}/snapshot` (manual snapshot, storage-level)
-  was never tried with the correct route shape after the 405.
+  was never tried with the correct route shape after the wrong-route 405.
 - check `periods[last].period_end` each run — as soon as a NEW period starts, the
   proxy gate lifts and normal psql/pg_dump works again; the branch snapshot is then
   redundant but harmless.
