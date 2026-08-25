@@ -2,6 +2,12 @@
 
 helper: `C:\Users\<user>\Downloads\automata\tools\window-capture\Capture-WindowBackground.ps1` (wraps the compiled `window-capture.exe`, PrintWindow-based).
 
+## build from source
+`window-capture.exe` is a build artifact — rebuild from `WinCap.cs` after any scoop/OS update:
+```powershell
+& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /out:window-capture.exe /target:exe /platform:anycpu WinCap.cs
+```
+
 ## visible windows (foreground/on-screen)
 
 use `GetWindowRect` on the target process `MainWindowHandle` and `CopyFromScreen` only that rect.
