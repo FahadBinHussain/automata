@@ -46,18 +46,9 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
 - **fix**: set `proxy_type=None` via `POST /api/v2/app/setPreferences` (body `json={"proxy_type":"None"}`). afterwards peer connections go direct and the swarm shows real peers. do NOT re-enable a global-mode SOCKS5 for qBittorrent without a strong reason.
 - **preference-write gotcha**: `setPreferences` must use `-ContentType 'application/x-www-form-urlencoded'` with body `json=<urlencoded>`; sending raw JSON with `-ContentType 'application/json'` returns 400 and silently no-ops.
 
-## IDM CLI for direct downloads (learned 2026-08-25)
+## IDM (direct downloads)
 
-user prefers **Internet Download Manager** for direct (non-torrent) downloads, e.g. hoster/DDL links from masked-link workflows. it lives at `C:\Program Files (x86)\Internet Download Manager\IDMan.exe` (NOT scoop).
-
-```
-& "C:\Program Files (x86)\Internet Download Manager\IDMan.exe" /d "https://host/file" /p "C:\Users\<user>\Downloads" /f "name.ext" /n
-```
-
-- `/d <url>` download, `/p <dir>` save folder, `/f <name>` filename, `/n` start immediately.
-- **`/a` only queues - it does NOT start the download** (2026-08-25 gotcha: added a pixeldrain file with `/a`, IDM sat idle while an earlier curl was still writing to the same path, confusing the whole check). use `/n` (or drop `/a`) to actually start it.
-- it downloads into its own multi-part temp then renames - if a curl/other process already wrote a same-named file, IDM may appear to "not run" while the file grows. kill the other downloader first, then let IDM own the path.
-- do not `Stop-Process IDMan` casually - it persists as a long-running tray process; killing it mid-download loses the resume state. only kill the competing downloader, not IDM.
+user prefers **Internet Download Manager** for direct (non-torrent) downloads, e.g. hoster/DDL links from masked-link workflows. CLI + gotchas live in `..\internetdownloadmanager.com\AGENTS.md`.
 
 ## watched-and-delete workflow gotchas
 
