@@ -39,3 +39,17 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
   - `POST /api/v2/torrents/toggleSequentialDownload` + `toggleFirstLastPiecePrio` - form `hashes`; these EXIST on 5.2.1 (earlier "404" claim was wrong). **toggle flips state** - only call when `seq_dl`/`f_l_piece_prio` is currently false.
 - **sequential + first/last-piece download (2026-08-18)**: user wants BOTH on every torrent. the ini `[Preferences]` keys `SeqDL=true`/`FLPPieces=true` survive qBittorrent's own ini rewrites but are **NOT applied to WebAPI adds** on 5.2.1 (new torrents land with seq_dl=False). `add-torrent.ps1` now ensures both via the toggle endpoints after every successful add (idempotent - only toggles when false).
 - getting magnets: 1337xx.to mirror detail pages work with plain HTTP via `..\1337x.to\get-magnet.ps1` (search on that mirror is a honeypot - never trust it). for movie search use `..\yts.lt\search.ps1`, for games/niche `..\thepiratebay.org\search.ps1` - both have `-Add` to push straight in here.
+
+## watched-and-delete workflow gotchas (learned 2026-08-24)
+
+when a watched episode/movie file is removed from a torrent's save path, the safe sequence is:
+1. `POST /api/v2/torrents/stop` (form `hashes`) - stop the whole torrent first.
+2. `POST /api/v2/torrents/filePrio` - **this endpoint takes `hash` (SINGULAR), NOT `hashes`**. using `hashes=` silently 400s with "Missing required parameters: hash" and the priority does NOT change. form: `hash=<infohash>&id=<file_index>&priority=0` (priority 0 = do not download; the file index comes from `GET /api/v2/torrents/files?hash=<infohash>`).
+3. kill qbittorrent (`Stop-Process -Name qbittorrent -Force`).
+4. `Remove-Item` ONLY that one file (and its sidecar .srt). never delete a whole season folder.
+5. restart qbittorrent, then **always `POST /api/v2/torrents/recheck` (form `hashes`)** and wait for `state` to leave `checking`.
+
+critical facts:
+- killing qbittorrent while a torrent is stopped with a missing file makes it come back in `missingFiles` at progress 0 (fastresume saved in a bad state). this LOOKS like the whole download was wiped but the on-disk files are untouched - a recheck revalidates the real data and restores progress. verify on disk with `Get-ChildItem` before panicking.
+- `torrents/resume` does NOT exist on 5.2.1 (404 "Endpoint does not exist") - use `POST /api/v2/torrents/start` (form `hashes`) instead.
+- qbittorrent path is scoop: `C:\Users\<user>\scoop\apps\qbittorrent\current\qbittorrent.exe` (the `C:\Program Files\qbittorrent.exe` guess is wrong).
