@@ -1,5 +1,5 @@
 From 41456022ca225fe469cb96b0f11a3eba004b1167 Mon Sep 17 00:00:00 2001
-From: Fahad Bin Hussain <<user>@example.com>
+From: Fahad Bin Hussain <user@example.com>
 Date: Mon, 24 Aug 2026 11:23:24 +0600
 Subject: [PATCH] fix(terabox): normalize empty dir to / for dm domain API
 
