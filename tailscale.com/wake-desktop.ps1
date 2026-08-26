@@ -5,8 +5,8 @@ Wakes a machine via Wake-on-LAN magic packet.
 .DESCRIPTION
 Sends WoL magic packets using multiple strategies so it works even when a
 router filters broadcast from Wi-Fi to Ethernet or drops a single packet:
-  - subnet broadcast (e.g. <lan-broadcast>)
-  - directed broadcast of the target IP (<ip> -> <lan-broadcast>)
+  - subnet broadcast (e.g. <lan>.255)
+  - directed broadcast of the target IP (target -> subnet broadcast)
   - unicast to the target IP directly (works when the router knows the MAC)
   - on both common WoL ports (7 and 9)
   - repeated bursts for reliability

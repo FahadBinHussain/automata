@@ -6,7 +6,7 @@
 #
 # flow:
 #   1. read the password from the mainframe vault item "dashboard.render.com"
-#      (the login item for <user>@example.com)
+#      (the login item for the render owner account)
 #   2. call signIn GraphQL mutation on api.render.com/graphql ->
 #      fresh idToken (never stale)
 #   3. query metrics for CPU, MEMORY_RSS, MEMORY_LIMIT, CPU_LIMIT, etc.
@@ -18,17 +18,28 @@
 #   .\render-quota.ps1 -RawJson           # dump full metric json
 #
 # vault: uses the mainframe vault-secret.psm1 (Bitwarden) - must be unlocked.
-# email default <user>@example.com (lumen service owner), override with -Email.
+# email + service id from render.com/.env.local (RENDER_EMAIL / RENDER_SERVICE_ID).
 # the password is stored in the vault item "dashboard.render.com" (login item).
 # no session token needs to be stored or refreshed - the script logs in fresh
 # every run.
 
 param(
-    [string]$ServiceId = "<service-id>",
-    [string]$Email = "<user>@example.com",
+    [string]$ServiceId = "",
+    [string]$Email = "",
     [int]$Hours = 6,
     [switch]$RawJson
 )
+
+$envLocal = Join-Path $PSScriptRoot '.env.local'
+if (Test-Path -LiteralPath $envLocal) {
+    Get-Content -LiteralPath $envLocal | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+        }
+    }
+}
+if (-not $ServiceId) { $ServiceId = $env:RENDER_SERVICE_ID }
+if (-not $Email) { $Email = $env:RENDER_EMAIL }
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

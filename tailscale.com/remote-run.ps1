@@ -8,17 +8,17 @@ needs when calling a remote machine.  The agent bash tool hangs when ssh
 polls for a long-running command; wrapping in a background job with a
 timeout avoids that.
 
-Default target is the home desktop (desktop-main, <ip> / tailscale
-<ip>, admin user).  Set these in tailscale.com/.env.local:
+Default target is the home desktop (desktop-main; see tailscale.com/.env.local for
+host/user).  Set these in tailscale.com/.env.local:
   TAILSCALE_SSH_KEY_NAME=<fleet key name>  (default: id_ed25519_dolby)
   REMOTE_USER=<remote username>             (default: admin)
-  REMOTE_HOST=<LAN IP or tailscale IP>      (default: <ip>)
+  REMOTE_HOST=<LAN IP or tailscale IP>      (default: see .env.local)
   REMOTE_PORT=<ssh port>                    (default: 22)
 
 Usage:
   .\remote-run.ps1 C:\path\to\script.ps1                 # run on desktop
   .\remote-run.ps1 C:\path\to\script.ps1 -Timeout 120     # override default 120s
-  .\remote-run.ps1 C:\path\to\script.ps1 -Host <ip> -User admin -KeyName id_ed25519_dolby
+  .\remote-run.ps1 C:\path\to\script.ps1 -Host <ip> -User <user> -KeyName <key-name>
 #>
 
 param(
@@ -50,7 +50,7 @@ if (-not $RemoteHost) { $RemoteHost = $env:REMOTE_HOST }
 
 if (-not $KeyName) { $KeyName = 'id_ed25519_dolby' }
 if (-not $RemoteUser) { $RemoteUser = 'admin' }
-if (-not $RemoteHost) { $RemoteHost = '<ip>' }
+if (-not $RemoteHost) { throw "REMOTE_HOST not set - add it to tailscale.com/.env.local or pass -Host" }
 
 $sshKey = Join-Path $env:USERPROFILE ".ssh\$KeyName"
 if (-not (Test-Path -LiteralPath $sshKey)) {
