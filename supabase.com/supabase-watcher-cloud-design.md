@@ -112,8 +112,8 @@ needs the web-session idToken (NOT the API key).
 - local script: `automata\render.com\render-quota.ps1` (BUILT 2026-08-23) -
   per-run signIn -> metrics query -> report headroom. NOT the lumen watcher -
   render usage is checked locally on demand.
-- helper vault items: render.com login creds (<user>@example.com owns the
-  workspace; the rnd_ API key also lives in the vault under API Keys).
+- helper vault items: render.com login creds (the workspace owner email lives in
+  render.com/.env.local; the rnd_ API key also lives in the vault under API Keys).
 
 ---
 

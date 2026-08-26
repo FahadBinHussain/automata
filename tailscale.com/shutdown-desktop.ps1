@@ -10,7 +10,7 @@ doesn't hang when the ssh connection resets mid-shutdown.
 
 Usage:
   .\shutdown-desktop.ps1                          # shutdown desktop-main
-  .\shutdown-desktop.ps1 -Host <ip> -User admin
+  .\shutdown-desktop.ps1 -Host <ip> -User <user>
 #>
 
 param(
@@ -35,7 +35,7 @@ if (-not $RemoteUser) { $RemoteUser = $env:REMOTE_USER }
 if (-not $RemoteHost) { $RemoteHost = $env:REMOTE_HOST }
 if (-not $KeyName) { $KeyName = 'id_ed25519_dolby' }
 if (-not $RemoteUser) { $RemoteUser = 'admin' }
-if (-not $RemoteHost) { $RemoteHost = '<ip>' }
+if (-not $RemoteHost) { throw "REMOTE_HOST not set - add it to tailscale.com/.env.local or pass -Host" }
 
 $sshKey = Join-Path $env:USERPROFILE ".ssh\$KeyName"
 if (-not (Test-Path -LiteralPath $sshKey)) {
