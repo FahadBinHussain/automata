@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.9
+// @version      0.7.10
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1040,11 +1040,15 @@ on conflict (key) do update set
 	// YouTube's newer lockup renderer uses camelCase classes
 	// (ytLockupViewModelContentImage), not the dashed BEM-ish names the older
 	// ytd-* renderers used. Keep both so home/search/sidebar all work.
+	// The href match intentionally uses 'watch?v=' WITHOUT the leading slash:
+	// the playlist (Watch Later) page emits relative hrefs ("watch?v=X&list=WL")
+	// while history/feed use "/watch?v=X" - the substring matches both, and the
+	// selectors are scoped to YouTube's thumbnail anchor classes anyway.
 	const THUMB_SEL = [
-		"a#thumbnail[href*='/watch?v='], a#thumbnail[href*='/shorts/']",
-		"a.ytd-thumbnail[href*='/watch?v='], a.ytd-thumbnail[href*='/shorts/']",
-		"a.ytLockupViewModelContentImage[href*='/watch?v='], a.ytLockupViewModelContentImage[href*='/shorts/']",
-		"a.yt-lockup-view-model-wiz__content-image[href*='/watch?v='], a.yt-lockup-view-model-wiz__content-image[href*='/shorts/']",
+		"a#thumbnail[href*='watch?v='], a#thumbnail[href*='/shorts/']",
+		"a.ytd-thumbnail[href*='watch?v='], a.ytd-thumbnail[href*='/shorts/']",
+		"a.ytLockupViewModelContentImage[href*='watch?v='], a.ytLockupViewModelContentImage[href*='/shorts/']",
+		"a.yt-lockup-view-model-wiz__content-image[href*='watch?v='], a.yt-lockup-view-model-wiz__content-image[href*='/shorts/']",
 	].join(",");
 
 	function idFromHref(href) {
