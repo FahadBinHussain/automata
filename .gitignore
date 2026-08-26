@@ -51,3 +51,9 @@ supabase.com/supabase-seed-lumen.ps1
 
 # f95zone session cookies
 **/.session/
+
+# steam free-license sweep runtime state (progress + local config)
+steampowered.com/activated_packages.txt
+steampowered.com/skipped_packages.txt
+steampowered.com/config.json.local
+steampowered.com/sweep.log
