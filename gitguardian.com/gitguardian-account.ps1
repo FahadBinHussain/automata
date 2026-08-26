@@ -43,7 +43,7 @@ function Show-Usage {
         '  .\gitguardian-account.ps1 logout [email]',
         '',
         'Examples:',
-        '  .\gitguardian-account.ps1 login <user>@example.com',
+        '  .\gitguardian-account.ps1 login <email>',
         '  .\gitguardian-account.ps1 health',
         '  .\gitguardian-account.ps1 whoami',
         '  .\gitguardian-account.ps1 scan "$(Get-Content secrets.txt -Raw)" secrets.txt',

@@ -20,18 +20,30 @@
 #   .\supabase-quota.ps1 -Raw                   # dump full attribute json
 #
 # vault: uses the mainframe vault-secret.psm1 (Bitwarden) - must be unlocked
-# (automata\bitwarden.com\unlock.ps1 or BW_SESSION). email default
-# <user>@example.com, override with -Email.
+# (automata\bitwarden.com\unlock.ps1 or BW_SESSION). email from .env.local (SUPABASE_EMAIL),
 # never prints tokens.
 
 param(
-    [string]$ProjectRef = "<project-ref>",
+    [string]$ProjectRef = "",
     [int]$Days = 30,
-    [string]$Email = "<user>@example.com",
-    [string]$OrgSlug = "<org-slug>",
+    [string]$Email = "",
+    [string]$OrgSlug = "",
     [switch]$RawJson,
     [switch]$AllProjectsFlag
 )
+
+# personal defaults from gitignored .env.local (see automata root AGENTS.md conventions)
+$envLocal = Join-Path $PSScriptRoot '.env.local'
+if (Test-Path -LiteralPath $envLocal) {
+    Get-Content -LiteralPath $envLocal | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+        }
+    }
+}
+if (-not $ProjectRef) { $ProjectRef = $env:SUPABASE_PROJECT_REF }
+if (-not $Email) { $Email = $env:SUPABASE_EMAIL }
+if (-not $OrgSlug) { $OrgSlug = $env:SUPABASE_ORG_SLUG }
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

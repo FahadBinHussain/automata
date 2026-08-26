@@ -13,7 +13,7 @@ alert to chat. zero staleness, scales to many accounts, nothing about the
 user's master password ever touches Render. local scripts keep working.
 
 current tracked services:
-- supabase (blindspot project <project-ref>): egress 5 GB, DB 500 MB,
+- supabase (blindspot project <ref>): egress 5 GB, DB 500 MB,
   storage 1 GB
 - neon (future, if it returns): CU-hours 100/project/month
 - render (lumen <service-id>): free tier resource headroom check
