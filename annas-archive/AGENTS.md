@@ -19,6 +19,8 @@ what works and what doesn't:
 
 **rule: use nodriver (`pip install nodriver`) launched with the real Edge binary (`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`).** the raw JS challenge auto-passes. do not use agent-browser for this (hCaptcha wall) and do not use Camoufox (fingerprint rejected).
 
+generic version of this bypass (any DDG-protected site) lives in `automata\tools\ddos-guard-bypass\` (`ddg-bypass.py <url>`). aa-get.py is the annas-specific wrapper on top of the same trick. curl_cffi (TLS/HTTP2 impersonation, no browser) may solve pure-JS-challenge targets without nodriver — see tools\ddos-guard-bypass\AGENTS.md (untested on AA, hCaptcha still needs the browser).
+
 ## download links on the md5 page
 
 - **Fast Partner Server #1-21** (`/fast_download/<md5>/0/<n>`) -> **require a membership/donation**. non-member lands on `fast_download_not_member`. skip unless logged in.
