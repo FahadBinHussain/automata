@@ -8,83 +8,142 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Root = Join-Path $env:APPDATA "mainframe\accounts\mega"
-$CurrentFile = Join-Path $Root "current.json"
+$VaultModule = "<user-home>\Downloads\mainframe\vault-secret.psm1"
+$DataRoot = Join-Path $env:APPDATA "automata\mega"
+$CurrentFile = Join-Path $DataRoot "current.txt"
 
 # --- helpers ---
 
-function Ensure-Root {
-  New-Item -ItemType Directory -Force -Path $Root | Out-Null
+function Ensure-DataRoot {
+  New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
 }
 
 function Normalize-Email {
   param([string] $Email)
   if ([string]::IsNullOrWhiteSpace($Email)) {
-    throw "Email is required. MEGA profiles are keyed by account email only."
+    throw "Email is required. MEGA profiles are keyed by account email."
   }
-  $Normalized = $Email.Trim().ToLowerInvariant()
-  if ($Normalized -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") {
-    throw "Invalid MEGA account email: $Email"
+  $n = $Email.Trim().ToLowerInvariant()
+  if ($n -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") {
+    throw "Invalid email: $Email"
   }
-  foreach ($c in [IO.Path]::GetInvalidFileNameChars()) {
-    if ($Normalized.IndexOf([string]$c, [StringComparison]::Ordinal) -ge 0) {
-      throw "Email contains a character that cannot be used in a Windows folder name: $Email"
-    }
-  }
-  return $Normalized
-}
-
-function Get-ProfilePath {
-  param([string] $Email)
-  return Join-Path $Root (Normalize-Email $Email)
-}
-
-function Get-ConfigPath {
-  param([string] $Email)
-  return Join-Path (Get-ProfilePath $Email) "mega.ini"
+  return $n
 }
 
 function Get-ActiveEmail {
   if (-not (Test-Path -LiteralPath $CurrentFile)) { return $null }
-  $j = Get-Content -LiteralPath $CurrentFile -Raw | ConvertFrom-Json
-  return $j.profile
+  return (Get-Content -LiteralPath $CurrentFile -Raw).Trim()
 }
 
-function Resolve-TargetEmail {
+function Resolve-Email {
   param([string] $Email)
   if ([string]::IsNullOrWhiteSpace($Email)) {
-    $active = Get-ActiveEmail
-    if (-not $active) {
-      throw "No active MEGA profile. Run .\mega-account.ps1 use <email> or pass <email>."
-    }
-    return $active
+    $a = Get-ActiveEmail
+    if (-not $a) { throw "No active MEGA profile. Use 'use <email>' or pass an email." }
+    return $a
   }
   return Normalize-Email $Email
 }
 
-function Write-ProfileJson {
+function Read-MegaPassword {
   param([string] $Email)
-  $dir = Get-ProfilePath $Email
-  New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  [ordered]@{
-    tool = "mega"
-    service = "MEGA"
-    profile = (Normalize-Email $Email)
-    configPath = (Get-ConfigPath $Email)
-    updatedAt = (Get-Date).ToString("o")
-  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $dir "profile.json") -Encoding UTF8
+  $normalized = Normalize-Email $Email
+  Import-Module $VaultModule -Force
+  $pw = Read-VaultSecret -Email $normalized -NamePattern "mega.nz" -ValueRegex '.+'
+  if ([string]::IsNullOrWhiteSpace($pw)) {
+    throw "No MEGA password in vault for $normalized. Run 'login $normalized' first."
+  }
+  return $pw
+}
+
+function Run-Megatools {
+  param([string] $Email, [string[]] $Args)
+  $normalized = Resolve-Email $Email
+  $pw = Read-MegaPassword $normalized
+  $escArgs = $Args | ForEach-Object { "'$_'" }
+  $cmd = "megatools -u '$normalized' -p '$pw' " + ($escArgs -join " ")
+  Invoke-Expression $cmd
+}
+
+# --- commands ---
+
+function Invoke-Login {
+  param([string] $Email)
+  $normalized = Normalize-Email $Email
+  Import-Module $VaultModule -Force
+  $user = Read-Host "MEGA username (email) for $normalized"
+  if ([string]::IsNullOrWhiteSpace($user)) { throw "Username is required." }
+  Write-Host "Enter MEGA password for $normalized (hidden):" -NoNewline
+  $pw = Read-Host -AsSecureString
+  if ($pw.Length -eq 0) { throw "Password is required." }
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw)
+  try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+  $itemName = "mega.nz - $($normalized -split '@')[0]"
+  Write-VaultSecretToExisting -Email $normalized -NamePattern "mega.nz" -Header "[password]" -Value $plain.Trim() -ItemName $itemName -Username $user -Uri "https://mega.nz"
+  Set-ActiveProfile $normalized
+  Write-Host "MEGA credentials saved to vault. Profile active: $normalized"
+}
+
+function Set-ActiveProfile {
+  param([string] $Email)
+  $normalized = Normalize-Email $Email
+  Ensure-DataRoot
+  Set-Content -LiteralPath $CurrentFile -Value $normalized -Encoding ASCII
+}
+
+function Get-Current {
+  $a = Get-ActiveEmail
+  if (-not $a) { Write-Host "No active MEGA profile."; return }
+  Write-Host $a
+}
+
+function Get-List {
+  # list profiles from vault items matching mega.nz
+  Import-Module $VaultModule -Force
+  $active = Get-ActiveEmail
+  # we can't list all mega items from vault easily without bw export
+  # just show the current + note
+  if ($active) {
+    Write-Host "* $active (active)"
+    Write-Host "  (run 'login <email>' to add more)"
+  } else {
+    Write-Host "No MEGA profiles yet. Run 'login <email>'"
+  }
+}
+
+function Get-Status {
+  param([string] $Email)
+  $e = Resolve-Email $Email
+  Import-Module $VaultModule -Force
+  $pw = Read-VaultSecret -Email $e -NamePattern "mega.nz" -ValueRegex '.+'
+  if ($pw) {
+    Write-Host "profile : $e"
+    Write-Host "status  : vault creds present"
+    Write-Host "active  : $(if ((Get-ActiveEmail) -eq $e) { 'yes' } else { 'no' })"
+  } else {
+    Write-Host "profile : $e"
+    Write-Host "status  : no vault creds"
+  }
+}
+
+function Get-StatusAll {
+  Import-Module $VaultModule -Force
+  $active = Get-ActiveEmail
+  if ($active) {
+    $pw = Read-VaultSecret -Email $active -NamePattern "mega.nz" -ValueRegex '.+'
+    Write-Host "* $active  [$(if ($pw) { 'vault-creds' } else { 'no-creds' })]"
+  } else {
+    Write-Host "No active MEGA profile."
+  }
 }
 
 function Show-Usage {
   @(
-    "MEGA account profile helper (megatools)",
+    "MEGA account helper (megatools + vault)",
     "",
-    "Profiles are keyed by account email only, stored in:",
-    "  %APPDATA%\mainframe\accounts\mega\<email>",
-    "",
-    "MEGA is email+password auth (2FA optional). login prompts for username",
-    "and password and writes a per-email mega.ini (in %APPDATA%\\mainframe\\accounts\\mega\\<email>\\),",
-    "which is what megatools reads. That dir is personal state, never committed.",
+    "Credentials stored in Bitwarden vault (item mega.nz - <email>).",
+    "No config files or local state beyond %APPDATA%\\automata\\mega\\current.txt",
+    "(which just holds the active email).",
     "",
     "Usage:",
     "  .\mega-account.ps1 login <email>",
@@ -93,194 +152,47 @@ function Show-Usage {
     "  .\mega-account.ps1 list",
     "  .\mega-account.ps1 status [email]",
     "  .\mega-account.ps1 status-all",
-    "  .\mega-account.ps1 path [email]",
-    "  .\mega-account.ps1 env [email]",
     "  .\mega-account.ps1 run [email] <megatools args...>",
     "  .\mega-account.ps1 upload [email] <local file> <remote folder>",
     "",
     "Examples:",
     "  .\mega-account.ps1 login ahmedtouhid8@example.com",
     "  .\mega-account.ps1 use ahmedtouhid8@example.com",
-    "  .\mega-account.ps1 status-all",
     "  .\mega-account.ps1 run df",
     "  .\mega-account.ps1 run ls /",
     "  .\mega-account.ps1 upload book.pdf /Books"
   ) -join [Environment]::NewLine | Write-Host
 }
 
-# --- core commands ---
-
-function Invoke-Login {
-  param([string] $Email)
-  $normalized = Normalize-Email $Email
-  $dir = Get-ProfilePath $normalized
-  New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  $username = Read-Host "MEGA username (email) for $normalized"
-  if ([string]::IsNullOrWhiteSpace($username)) { throw "Username is required." }
-  Write-Host "Enter MEGA password for $normalized (hidden):" -NoNewline
-  $pw = Read-Host -AsSecureString
-  if ($pw.Length -eq 0) { throw "Password is required." }
-  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw)
-  try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-  # write mega.ini for megatools (username + password plaintext)
-  $ini = @(
-    "[Login]"
-    "Username = $username"
-    "Password = $plain"
-  ) -join [Environment]::NewLine
-  Set-Content -LiteralPath (Get-ConfigPath $normalized) -Value $ini -Encoding ASCII
-  Write-ProfileJson $normalized
-  Set-ActiveProfile $normalized
-  Write-Host "MEGA profile configured: $normalized"
-}
-
-function Set-ActiveProfile {
-  param([string] $Email)
-  $normalized = Normalize-Email $Email
-  Ensure-Root
-  [ordered]@{
-    tool = "mega"
-    service = "MEGA"
-    profile = $normalized
-    updatedAt = (Get-Date).ToString("o")
-  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $CurrentFile -Encoding UTF8
-}
-
-function Get-Current {
-  $active = Get-ActiveEmail
-  if (-not $active) {
-    Write-Host "No active MEGA profile."
-    return
-  }
-  Write-Host $active
-}
-
-function Get-List {
-  if (-not (Test-Path -LiteralPath $Root)) {
-    Write-Host "No MEGA profiles yet."
-    return
-  }
-  $active = Get-ActiveEmail
-  foreach ($dir in (Get-ChildItem -LiteralPath $Root -Directory | Sort-Object Name)) {
-    $marker = if ($dir.Name -eq $active) { "*" } else { " " }
-    "{0} {1}" -f $marker, $dir.Name
-  }
-}
-
-function Get-Status {
-  param([string] $Email)
-  $target = Resolve-TargetEmail $Email
-  $dir = Get-ProfilePath $target
-  $cfg = Get-ConfigPath $target
-  if (-not (Test-Path -LiteralPath $cfg)) {
-    Write-Host "MEGA profile not logged in: $target (no mega.ini)"
-    return
-  }
-  $json = Get-Content -LiteralPath (Join-Path $dir "profile.json") -Raw | ConvertFrom-Json
-  Write-Host "profile : $target"
-  Write-Host "config  : $($json.configPath)"
-  Write-Host "updated : $($json.updatedAt)"
-  Write-Host "status  : configured (megatools mega.ini present)"
-}
-
-function Get-StatusAll {
-  if (-not (Test-Path -LiteralPath $Root)) {
-    Write-Host "No MEGA profiles yet."
-    return
-  }
-  $active = Get-ActiveEmail
-  foreach ($dir in (Get-ChildItem -LiteralPath $Root -Directory | Sort-Object Name)) {
-    $cfg = Join-Path $dir.FullName "mega.ini"
-    $state = if (Test-Path -LiteralPath $cfg) { "configured" } else { "no-config" }
-    $marker = if ($dir.Name -eq $active) { "*" } else { " " }
-    "{0} {1}  [{2}]" -f $marker, $dir.Name, $state
-  }
-}
-
-function Get-Path {
-  param([string] $Email)
-  $target = Resolve-TargetEmail $Email
-  Write-Host (Get-ProfilePath $target)
-}
-
-function Get-Env {
-  param([string] $Email)
-  $target = Resolve-TargetEmail $Email
-  $cfg = Get-ConfigPath $target
-  Write-Host "MEGA_EMAIL=$target"
-  Write-Host "MEGA_CONFIG=$cfg"
-}
-
-function Invoke-Run {
-  param([string] $Email, [string[]] $MegatoolsArgs)
-  $target = Resolve-TargetEmail $Email
-  $cfg = Get-ConfigPath $target
-  if (-not (Test-Path -LiteralPath $cfg)) {
-    throw "MEGA profile not logged in: $target. Run .\mega-account.ps1 login $target first."
-  }
-  if ($MegatoolsArgs.Count -eq 0) {
-    throw "megatools arguments are required, e.g. 'run df' or 'run ls /'."
-  }
-  $cmd = "megatools --config $cfg " + ($MegatoolsArgs | ForEach-Object { "'$_'" }) -join " "
-  Invoke-Expression $cmd
-}
-
-function Invoke-Upload {
-  param([string] $Email, [string] $LocalPath, [string] $RemoteFolder)
-  if ([string]::IsNullOrWhiteSpace($LocalPath)) { throw "Local file path is required." }
-  if ([string]::IsNullOrWhiteSpace($RemoteFolder)) { throw "Remote folder is required, e.g. /Books" }
-  if (-not (Test-Path -LiteralPath $LocalPath)) { throw "Local file not found: $LocalPath" }
-  $target = Resolve-TargetEmail $Email
-  $cfg = Get-ConfigPath $target
-  if (-not (Test-Path -LiteralPath $cfg)) {
-    throw "MEGA profile not logged in: $target. Run .\mega-account.ps1 login $target first."
-  }
-  $quotedLocal = "'$($LocalPath -replace "'", "''")'"
-  $quotedRemote = "'$($RemoteFolder -replace "'", "''")'"
-  Invoke-Expression "megatools --config $cfg put --no-progress --path $quotedRemote $quotedLocal"
-}
-
 # --- dispatch ---
 
 switch ($Command.ToLowerInvariant()) {
   "login" {
-    if (-not $Remaining -or $Remaining.Count -lt 1) { throw "login requires <email>" }
+    if (-not ($Remaining -and $Remaining.Count -ge 1)) { throw "login requires <email>" }
     Invoke-Login -Email $Remaining[0]
   }
   "use" {
-    if (-not $Remaining -or $Remaining.Count -lt 1) { throw "use requires <email>" }
+    if (-not ($Remaining -and $Remaining.Count -ge 1)) { throw "use requires <email>" }
     Set-ActiveProfile -Email $Remaining[0]
     Write-Host "Active MEGA profile: $(Normalize-Email $Remaining[0])"
   }
   "current" { Get-Current }
   "list" { Get-List }
-  "status" {
-    if ($Remaining -and $Remaining.Count -ge 1) { Get-Status -Email $Remaining[0] }
-    else { Get-Status -Email $null }
-  }
+  "status" { Get-Status -Email $(if ($Remaining -and $Remaining.Count -ge 1) { $Remaining[0] } else { $null }) }
   "status-all" { Get-StatusAll }
-  "path" {
-    if ($Remaining -and $Remaining.Count -ge 1) { Get-Path -Email $Remaining[0] }
-    else { Get-Path -Email $null }
-  }
-  "env" {
-    if ($Remaining -and $Remaining.Count -ge 1) { Get-Env -Email $Remaining[0] }
-    else { Get-Env -Email $null }
-  }
   "run" {
     if (-not $Remaining) { throw "run requires megatools arguments, e.g. 'run df' or 'run ls /'" }
     if ($Remaining[0] -match "^[^@\s]+@[^@\s]+\.[^@\s]+$") {
-      Invoke-Run -Email $Remaining[0] -MegatoolsArgs ($Remaining[1..($Remaining.Count - 1)])
+      Run-Megatools -Email $Remaining[0] -Args ($Remaining[1..($Remaining.Count - 1)])
     } else {
-      Invoke-Run -Email $null -MegatoolsArgs $Remaining
+      Run-Megatools -Email $null -Args $Remaining
     }
   }
   "upload" {
-    # upload [email] <local> <remote>  OR  upload <local> <remote>
     if ($Remaining.Count -ge 3 -and $Remaining[0] -match "^[^@\s]+@[^@\s]+\.[^@\s]+$") {
-      Invoke-Upload -Email $Remaining[0] -LocalPath $Remaining[1] -RemoteFolder $Remaining[2]
+      Run-Megatools -Email $Remaining[0] -Args @("put", "--no-progress", "--path", $Remaining[2], $Remaining[1])
     } elseif ($Remaining.Count -ge 2) {
-      Invoke-Upload -Email $null -LocalPath $Remaining[0] -RemoteFolder $Remaining[1]
+      Run-Megatools -Email $null -Args @("put", "--no-progress", "--path", $Remaining[1], $Remaining[0])
     } else {
       throw "upload requires <local file> <remote folder> (optional leading <email>)"
     }
