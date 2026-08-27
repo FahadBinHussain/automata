@@ -11,10 +11,20 @@ megatools CLI (scoop `megatools`, installed 2026-08-26, v1.11.5) + a vault-backe
 ## credentials live in the vault (no local state at all)
 
 - MEGA is email+password auth (2FA optional). The helper stores the password in the **Bitwarden vault**
-  (item `mega.nz - <email>`, header `[password]`, username = the mega username).
-- `run`/`upload` read the password from the vault each time and pass `megatools -u <email> -p <pw> ...` inline.
+  (item `mega.nz - <email>`).
+- password lookup order: notes `[password]` header first, then fall back to the item's `login.password`
+  field (existing items like `ahmedtouhid88` keep it in login.password). `Read-VaultSecret` only reads
+  notes, so the helper has its own login.password fallback via `bw list items`.
+- `run`/`upload` read the password from the vault each time and pass `megatools <subcommand> -u <email> -p <pw> ...`.
 - **stateless**: the email is always passed explicitly, there is no active-profile/current file, nothing is stored
   under `%APPDATA%\mainframe\accounts\` or anywhere else locally, and no `mega.ini` with a password is ever created.
+
+## megatools arg order (IMPORTANT)
+
+- `-u`/`-p` are **subcommand options in this Windows build** - they go AFTER the subcommand:
+  `megatools df -u <email> -p <pw>` / `megatools put -u <email> -p <pw> --path /Root file.pdf`.
+  `megatools -u ... -p ... df` prints top-level usage instead of running. the helper's `run`/`upload`
+  place them correctly.
 
 ## usage
 
@@ -30,19 +40,20 @@ megatools CLI (scoop `megatools`, installed 2026-08-26, v1.11.5) + a vault-backe
 
 ## common ops (megatools reference)
 
-- upload: `megatools -u <email> -p <pw> put --no-progress --path /Remote /local/file`
-- download: `megatools -u <email> -p <pw> get --path . /Remote/file`
+- upload: `megatools put -u <email> -p <pw> --no-progress --path /Root /local/file`
+- download: `megatools get -u <email> -p <pw> --path . /Root/file`
 - download public link (no login needed): `megatools dl <mega.nz link> --path .`
-- list: `megatools -u <email> -p <pw> ls -R /folder`
-- make dir: `megatools -u <email> -p <pw> mkdir /folder/sub`
-- share link: `megatools -u <email> -p <pw> export /folder/file`
-- storage: `megatools -u <email> -p <pw> df -h`
+- list: `megatools ls -u <email> -p <pw> -R /folder`
+- make dir: `megatools mkdir -u <email> -p <pw> /folder/sub`
+- share link: `megatools export -u <email> -p <pw> /folder/file`
+- storage: `megatools df -u <email> -p <pw>`
 
 ## gotchas
 
 - `put` does NOT auto-create the target remote folder - run `mkdir` first or `put` fails.
-- `-u`/`-p` are global options, must come before the subcommand: `megatools -u X -p Y put ...`.
-- the helper's `run` wraps this via `megatools -u <cfg email> -p <pw> <args...>`.
+- **cannot upload to `/` toplevel** - use `/Root` (or a subfolder of it) as the remote path.
+- `-u`/`-p` are subcommand options: `megatools <subcommand> -u X -p Y ...`, not before the subcommand.
+- the helper's `run`/`upload` already place `-u`/`-p` after the subcommand.
 - 2FA-protected accounts: megatools has no TOTP support. if an account has 2FA on, `run` will fail;
   we'd need the MEGA session cookie / MFA token path instead.
 - megatools caches a local filesystem cache keyed by session; a fresh login re-fetches it (slower first `ls`).
