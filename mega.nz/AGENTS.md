@@ -8,28 +8,25 @@ megatools CLI (scoop `megatools`, installed 2026-08-26, v1.11.5) + a vault-backe
 - accepts `-u <email> -p <password>` per invocation -> no config file, no plaintext creds on disk.
 - scoop persists a default `mega.ini` at `%USERPROFILE%\scoop\persist\megatools\mega.ini`; we never write creds into it.
 
-## credentials live in the vault (no mainframe accounts dir, no ini)
+## credentials live in the vault (no local state at all)
 
 - MEGA is email+password auth (2FA optional). The helper stores the password in the **Bitwarden vault**
   (item `mega.nz - <email>`, header `[password]`, username = the mega username).
 - `run`/`upload` read the password from the vault each time and pass `megatools -u <email> -p <pw> ...` inline.
-- the ONLY local state is `%APPDATA%\automata\mega\current.txt` holding the active email (not a secret).
-- nothing is written under `%APPDATA%\mainframe\accounts\` and no `mega.ini` with a password is ever created.
+- **stateless**: the email is always passed explicitly, there is no active-profile/current file, nothing is stored
+  under `%APPDATA%\mainframe\accounts\` or anywhere else locally, and no `mega.ini` with a password is ever created.
 
 ## usage
 
 ```
 .\mega-account.ps1 login <email>            # prompts username + hidden password -> vault
-.\mega-account.ps1 status-all               # see configured profiles (* = active)
-.\mega-account.ps1 use <email>              # switch active (writes current.txt)
-.\mega-account.ps1 run df                   # disk usage on active
-.\mega-account.ps1 run ls /                 # list root
-.\mega-account.ps1 run mkdir /Books
-.\mega-account.ps1 upload book.pdf /Books   # upload (run mkdir first - put doesn't auto-create)
-.\mega-account.ps1 run export /Books/file.pdf   # get a share link
+.\mega-account.ps1 status <email>           # check vault creds exist
+.\mega-account.ps1 run <email> df           # disk usage
+.\mega-account.ps1 run <email> ls /         # list root
+.\mega-account.ps1 run <email> mkdir /Books
+.\mega-account.ps1 upload <email> book.pdf /Books   # upload (run mkdir first - put doesn't auto-create)
+.\mega-account.ps1 run <email> export /Books/file.pdf   # get a share link
 ```
-
-`run`/`upload` use the active profile unless an explicit `<email>` is passed first.
 
 ## common ops (megatools reference)
 
