@@ -13,6 +13,30 @@ quota resets at the end of the billing period.
   `periods[last].compute_time` (CU-sec). `compute_time_seconds` on project detail is
   LIFETIME-cumulative, do NOT use it for current-period decisions.
 
+## egress (data transfer) is ALSO per-project on free — verified 2026-08-29
+
+**The 5 GB/month egress (public network transfer) quota is PER-PROJECT, not
+account-wide.** Despite the official plans page wording ("a single account-wide pool"),
+creating a NEW project on the SAME account gives it a FRESH 5 GB egress bucket even
+while another project on that account is transfer-quota-dead. Verified end-to-end on
+the-daily-times (awdardcastle@gmail.com): old project `round-field-05224978` at
+5.53 GB (suspended, `ERROR: Your project has exceeded the data transfer quota` on
+pg_dump/psql) → created `twilight-mouse-28885519` ("the-daily-times-v2") on the same
+account → project detail `data_transfer_bytes: 0` at creation, endpoint active,
+`psql ... SELECT 1` works. So an egress-quota-exhausted DB can be migrated to a fresh
+project on the same account (same as the blindspot migration drills, which hit the
+same 5 GB cap 5x and each new project started at 0 transfer).
+
+Caveats that still apply:
+- the egress gate is per-PROJECT, but read it via the project detail endpoint
+  (`data_transfer_bytes` on `GET /projects/{id}`), NOT the org consumption endpoint —
+  org `data_transfer` aggregates every project in the org including deleted/suspended
+  ones, so it overcounts a single project's situation.
+- migrating data OUT of a quota-dead project is still blocked until its compute
+  resumes (reset ~next period) — you can create the fresh project and point writes at
+  it, but you can't pg_dump the dead one until the gate lifts.
+- compute (CU-h) is per-project too: a fresh project resets BOTH buckets.
+
 ## the trick that WORKS while frozen: storage-level branch snapshot
 
 The compute quota gate is enforced at the Neon proxy on EVERY compute-consuming path
