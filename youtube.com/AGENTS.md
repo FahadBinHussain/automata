@@ -45,3 +45,13 @@
 **Music history** — InnerTube browse with `client = WEB_REMIX`, `browseId = "FEmusic_history"`, `setLogin = true` returns YT Music history as `musicShelfRenderer` sections (Flow's `HistoryPage`/`musicHistory()` does exactly this).
 
 **Wrappers/repos**: `LuanRT/YouTube.js` (Node/TS), `FreeTubeApp/innertube` (Dart), `TeamNewPipe/NewPipeExtractor` (Java/Kotlin — the one Flow uses).
+
+## yt-dlp age-restricted videos: cookies vs PO token (verified 2026-08-30)
+
+- **age gate** (`Sign in to confirm your age`) needs **account cookies only** — a logged-in, age-verified YouTube account. PO token does NOT affect the age gate.
+- **quality on age-restricted videos** is separate: the higher-res `web_creator` client formats get skipped without a **GVS PO token** (`web_creator client https formats require a GVS PO Token`), so only the low-res fallback (e.g. `18` 360p) remains. age-restriction itself also hides some formats even with valid cookies. so on age-restricted videos: cookies = access, PO token = quality.
+- **extracting cookies from modern Edge is blocked**: this machine's Edge stores cookies with **v20 app-bound encryption** (`encrypted_value` blob header `76 32 30` = `v20`; `value` column empty). only the Edge process can decrypt them.
+  - `yt-dlp --cookies-from-browser edge` -> `Failed to decrypt with DPAPI` (yt-dlp only supports v10/DPAPI; same in 2026.08.19). fails with this error whether Edge is running or closed.
+  - copying/reading the cookie DB externally (sqlite, VSS shadow, agent-browser sync) yields undecryptable/empty values; agent-browser's synced profile drops to ~33 cookies because Edge prunes the v20 rows it can't validate.
+  - `--disable-features=AppBoundEncryption` only affects NEW cookies; it does NOT re-encrypt existing ones, and clearing the google/youtube cookies to force re-writes does NOT re-establish the session — the account cookies are gone until re-login. don't try this on a live profile; restore from backup if you do.
+- **working path**: export cookies via a browser-side extension (e.g. "Get cookies.txt LOCALLY") — Edge decrypts internally, sidestepping v20 entirely. `yt-dlp --cookies cookies.txt` then works; youtube.com auth cookies in the export are enough for the age gate.
