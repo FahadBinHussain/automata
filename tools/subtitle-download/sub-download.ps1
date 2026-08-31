@@ -53,7 +53,8 @@ foreach ($p in $Path) {
   $resolved = Resolve-Path -LiteralPath $p -ErrorAction SilentlyContinue
   if (-not $resolved) { Write-Warning "path not found: $p"; continue }
   foreach ($r in $resolved) {
-    if ($r.PSIsContainer) {
+    # PathInfo has no .PSIsContainer — use Test-Path -PathType Container
+    if (Test-Path -LiteralPath $r.Path -PathType Container) {
       $videos += Get-ChildItem -LiteralPath $r.Path -Recurse -File -Include *.mkv,*.mp4,*.avi,*.webm -ErrorAction SilentlyContinue
     } else {
       $videos += Get-Item -LiteralPath $r.Path -ErrorAction SilentlyContinue

@@ -72,3 +72,10 @@ names, so it can pick a BluRay/BRRip sub (best for BluRay encodes).
   actually complete on disk.
 - the CLI is `python -m subliminal download ...` (no `subdl`/`subed` on this
   machine; `pip install subliminal` is the toolchain).
+- **directory `-Path` detection bug (fixed 2026-08-31)**: `Resolve-Path` returns
+  `PathInfo` objects which have NO `.PSIsContainer` property, so a directory
+  passed via `-Path` was treated as a single "video" — the download still worked
+  (subliminal scans the dir itself) but the sanitize/alass sync loop then
+  iterated the wrong item and failed with `Move-Item: Destination path cannot
+  be a subdirectory of the source or the source itself: ...\s01\s01.`.
+  Detection now uses `Test-Path -LiteralPath $r.Path -PathType Container`.
