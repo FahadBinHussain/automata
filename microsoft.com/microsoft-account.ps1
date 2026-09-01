@@ -1,5 +1,13 @@
 $ErrorActionPreference = 'Stop'
 
+# vault-secret module lives in mainframe until the merge moves it; import from
+# the mainframe path so there is a single source of truth for now.
+$vaultModule = Join-Path $env:USERPROFILE 'Downloads\mainframe\vault-secret.psm1'
+if (-not (Test-Path -LiteralPath $vaultModule)) {
+    throw "vault-secret.psm1 not found at $vaultModule - expected for now until the module moves into automata"
+}
+Import-Module $vaultModule -Force
+
 $accountRoot = Join-Path $env:APPDATA 'mainframe\accounts\microsoft'
 $currentFile = Join-Path $accountRoot 'current.json'
 $graphEndpoint = 'https://graph.microsoft.com'
@@ -45,7 +53,7 @@ Notes:
   - Default tenant is consumers for personal Microsoft accounts.
   - Default scopes cover mail, calendar, contacts, OneDrive, To Do, OneNote, and Sticky Notes delegated access.
   - Generic Graph calls support GET, POST, PATCH, PUT, and DELETE; only run write/delete calls you intend.
-  - Tokens are stored as refresh-token.txt and access-token.txt; env/status never print token values.
+  - The refresh token is vault-native (Bitwarden item "login.microsoftonline.com - <user>", notes header "[refresh token]"). The access token is short-lived and stays as an ephemeral on-disk cache only; env/status never print token values.
 '@
 }
 
@@ -83,6 +91,32 @@ function Get-ProfilePath {
 function Get-ProfileConfigPath {
     param([string]$ProfilePath)
     Join-Path $ProfilePath 'profile.json'
+}
+
+# Refresh token is the durable Microsoft credential and is vault-native:
+# stored in the Bitwarden item "login.microsoftonline.com - <user>" notes under
+# the "[refresh token]" header. The access token is short-lived (regenerated on
+# refresh) and stays as an ephemeral on-disk cache only. Lookup falls back to the
+# profile email line in the item notes (vault convention for non-email-keyed items).
+function Write-RefreshTokenVault {
+    param(
+        [string]$Profile,
+        [string]$RefreshToken
+    )
+
+    $normalized = Normalize-ProfileName -Profile $Profile
+    if ([string]::IsNullOrWhiteSpace($RefreshToken)) {
+        return
+    }
+    $userPrefix = ($normalized -split '@')[0]
+    Write-VaultSecretToExisting -Email $normalized -NamePattern 'login.microsoftonline.com*' -Header '[refresh token]' -Value $RefreshToken.Trim() -ItemName "login.microsoftonline.com - $userPrefix" -Username $normalized -Uri 'https://login.microsoftonline.com'
+}
+
+function Read-RefreshTokenVault {
+    param([string]$Profile)
+
+    $normalized = Normalize-ProfileName -Profile $Profile
+    return Read-VaultSecret -Email $normalized -NamePattern 'login.microsoftonline.com*' -ValueRegex '[A-Za-z0-9._$*!-]{50,}'
 }
 
 function Get-RefreshTokenPath {
@@ -503,7 +537,7 @@ function Write-ProfileTokens {
     New-Item -ItemType Directory -Force -Path $profilePath | Out-Null
 
     if (-not [string]::IsNullOrWhiteSpace([string]$TokenResponse.refresh_token)) {
-        Write-SecretValue -Path (Get-RefreshTokenPath -ProfilePath $profilePath) -Value ([string]$TokenResponse.refresh_token)
+        Write-RefreshTokenVault -Profile $normalized -RefreshToken ([string]$TokenResponse.refresh_token)
     }
 
     Write-SecretValue -Path (Get-AccessTokenPath -ProfilePath $profilePath) -Value ([string]$TokenResponse.access_token)
@@ -527,7 +561,7 @@ function Write-ProfileTokens {
         redirectUri = $RedirectUri
         scopes = @($Scopes)
         graphEndpoint = $graphEndpoint
-        refreshTokenPath = (Get-RefreshTokenPath -ProfilePath $profilePath)
+        refreshTokenVault = "login.microsoftonline.com - $((($normalized -split '@')[0]))"
         accessTokenPath = (Get-AccessTokenPath -ProfilePath $profilePath)
         accessTokenExpiresAt = $expiresAt
         updatedAt = [DateTimeOffset]::UtcNow.ToString('o')
@@ -561,9 +595,9 @@ function Get-AccessToken {
         return $accessToken
     }
 
-    $refreshToken = Read-SecretValue -Path (Get-RefreshTokenPath -ProfilePath $profilePath)
+    $refreshToken = Read-RefreshTokenVault -Profile $normalized
     if ([string]::IsNullOrWhiteSpace($refreshToken)) {
-        throw "Microsoft profile has no refresh token: $normalized. Run login again."
+        throw "Microsoft profile has no refresh token in the vault: $normalized. Run login again."
     }
 
     $scopes = @($metadata.scopes | ForEach-Object { [string]$_ })
@@ -680,7 +714,7 @@ function Get-ProfileStatus {
     $profilePath = Get-ProfilePath -Profile $normalized
     $metadata = Get-ProfileMetadata -Profile $normalized
     $exists = Test-Path -LiteralPath $profilePath
-    $refreshToken = Read-SecretValue -Path (Get-RefreshTokenPath -ProfilePath $profilePath)
+    $refreshToken = Read-RefreshTokenVault -Profile $normalized
     $accessToken = Read-SecretValue -Path (Get-AccessTokenPath -ProfilePath $profilePath)
     $active = Get-ActiveProfile
 
@@ -725,17 +759,18 @@ function Remove-ProfileToken {
     $normalized = Normalize-ProfileName -Profile $Profile
     $profilePath = Get-ProfilePath -Profile $normalized
     $removed = $false
-    foreach ($path in @((Get-RefreshTokenPath -ProfilePath $profilePath), (Get-AccessTokenPath -ProfilePath $profilePath))) {
-        if (Test-Path -LiteralPath $path) {
-            Remove-Item -LiteralPath $path -Force
-            $removed = $true
-        }
+    $atPath = Get-AccessTokenPath -ProfilePath $profilePath
+    if (Test-Path -LiteralPath $atPath) {
+        Remove-Item -LiteralPath $atPath -Force
+        $removed = $true
     }
 
     if ($removed) {
-        Write-Host "Removed saved Microsoft token files for: $normalized"
+        Write-Host "Removed the on-disk access-token cache for: $normalized"
+        Write-Host "The refresh token in the vault (login.microsoftonline.com item) was not removed. Delete it manually from Bitwarden if needed."
     } else {
-        Write-Host "No saved Microsoft token files found for: $normalized"
+        Write-Host "No on-disk Microsoft token cache found for: $normalized"
+        Write-Host "The refresh token in the vault (login.microsoftonline.com item) was not removed. Delete it manually from Bitwarden if needed."
     }
 }
 
