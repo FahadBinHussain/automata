@@ -83,3 +83,9 @@ python steam-free-license-sweep.py --max 1000   # stop after 1000 adds
 
 - `steam-launch.ps1` + `steam-cdp-eval.mjs` - launch shortcuts via the CEF `SteamClient.Apps.RunGame` bridge (steam://rungameid doesn't work for shortcuts). see header comments.
 - `steam-shortcuts.ps1` - read/write `shortcuts.vdf`. see header comments + automata root AGENTS.md "steam shortcuts vdf gotchas".
+
+## force-kill steam after vdf edit = entry loss + restore flow
+
+if you edit `shortcuts.vdf` while steam is running (the script warns), and then force-kill steam (`Stop-Process -Force`), steam's exit handler rewrites the file from its in-memory copy — reverting your edit AND potentially dropping entries (e.g. DaysGone vanished from index 0). the file also shrinks (~3762 -> 3384 bytes).
+
+fix: the `remove` command's `.bak-<timestamp>` has the pre-remove state. restore it: `Copy-Item <bak> shortcuts.vdf -Force`, list-verify all entries are present (including DaysGone), then re-apply the write with steam fully stopped. never write vdf while steam runs.
