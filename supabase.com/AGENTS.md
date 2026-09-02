@@ -13,8 +13,12 @@ dashboard session JWT.
   30), `-Email` (default from env/.env.local), `-OrgSlug`,
   `-RawJson` (dump full json), `-AllProjectsFlag`.
 - flow: read refresh token from vault -> refresh via gotrue (rotates the
-  refresh token) -> GET /platform/projects/{ref}/daily-stats per attribute ->
-  write the ROTATED refresh token back to the vault.
+  refresh token, old token dies immediately) -> write the ROTATED refresh token
+  back to the vault BEFORE querying daily-stats -> GET
+  /platform/projects/{ref}/daily-stats per attribute. if the process dies
+  between refresh and vault save the stored token is dead and the next run
+  gets 400 refresh_token_already_used - the script now catches that and
+  prints the re-login steps instead of a raw 400.
 - vault item: `supabase.com` -> "Dashboard Session" section, value format
   `<issuer>|<refresh_token>` (issuer = `alt.supabase.io`). requires the
   Bitwarden vault unlocked (automata\bitwarden.com\unlock.ps1 or BW_SESSION).
@@ -49,9 +53,19 @@ with a PAT - they need the dashboard user JWT (from
 
 ## gotchas
 
-- **refresh token rotation**: every refresh returns a NEW refresh token; if you
-  don't save it back, the stored one is single-use. the script handles this -
-  manual tests must too.
+- **refresh token rotation / already_used (2026-09-02)**: every refresh returns
+  a NEW refresh token and the old one dies immediately; if you don't save it
+  back (crash between POST and vault write, BW_SESSION expiry, etc.) the
+  stored token is single-use and the next run gets
+  `400 refresh_token_already_used`. the script now catches that code and
+  prints the re-login recovery steps. manual tests must save the rotated
+  token too.
+- **egress metric gotcha (2026-09-02)**: `total_egress` has been 0 every day
+  since project creation (2026-08-20); actual DB egress is in
+  `total_supavisor_egress_bytes` (pooler, 902 MB in 13 days). the script now
+  reports free egress as `max(total_egress, supavisor)` so it doesn't show
+  0% while the pooler burns quota - the dashboard counts pooler toward the
+  5 GB cap.
 - the automation-browser login flow hits an invisible hcaptcha that can deadlock
   ("Signing in..." forever); retrying the submit sometimes auto-passes it.
   there's no browser-free way to mint the initial session - it requires one
