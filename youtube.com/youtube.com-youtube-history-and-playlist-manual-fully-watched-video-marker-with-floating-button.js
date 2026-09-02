@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      17.9
+// @version      18.1
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
-// @description  Mark fully watched videos and highlight duplicate 100%-watched entries on YouTube History and Playlists.
+// @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube (history, playlists, home, search, subs).
 // @author       Fahad
 // @match        https://www.youtube.com/*
 // @grant        GM_addStyle
@@ -104,8 +104,20 @@
     const barSnapshots = new WeakMap();
 
     function isSupportedPage() {
-        const path = location.pathname.replace(/\/+$/, '');
-        return path === '/feed/history' || path === '/playlist';
+        // v18.1: run everywhere, not just /feed/history and /playlist. Home,
+        // search, subs, trending, etc. all render the same card types, and the
+        // custom .ytp-thumb-bar progress comes from the neon tracker, so dimming
+        // fully-watched videos works on every YouTube surface.
+        return true;
+    }
+
+    // YouTube nests card renderers (ytd-rich-item-renderer wraps yt-lockup-view-
+    // model on channel/home/search pages), so one thumbnail can match CARD_SELECTOR
+    // twice with the same video id. That doubled every mark (dim applied twice,
+    // false "duplicate" on a single thumbnail, and the duplicate's opacity:1!
+    // killed the dim). Only the OUTERMOST matched card per thumbnail should count.
+    function isNestedCard(card) {
+        return !!(card.parentElement && card.parentElement.closest(CARD_SELECTOR));
     }
 
     function getVideoId(card) {
@@ -256,6 +268,7 @@
         const byVideoId = new Map();
 
         document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+            if (isNestedCard(card)) return;
             const native = card.querySelector(NATIVE_PROGRESS_SELECTOR);
             if (native) {
                 const heights = new Map();
