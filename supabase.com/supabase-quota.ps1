@@ -9,9 +9,10 @@
 #      ("Dashboard Session" section, format: <issuer>|<refresh_token>)
 #   2. POST https://<issuer>/auth/v1/token?grant_type=refresh_token to get a
 #      fresh access_token (30 min) - the response ROTATES the refresh token
-#   3. GET /platform/projects/{ref}/daily-stats?attribute=<attr>&startDate&endDate
+#      (old token is immediately invalid; crash before step 3 orphans it)
+#   3. write the ROTATED refresh token back to the vault (keeps the cycle alive)
+#   4. GET /platform/projects/{ref}/daily-stats?attribute=<attr>&startDate&endDate
 #      with the access token
-#   4. write the ROTATED refresh token back to the vault (keeps the cycle alive)
 #
 # usage:
 #   .\supabase-quota.ps1                        # egress table for the default ref
@@ -60,17 +61,27 @@ $issuer = $parts[0]
 $refreshToken = $parts[1]
 
 # 2. refresh -> access token (rotates refresh token)
+# gotrue invalidates the old token immediately; if this process dies before
+# step 3 (vault save) the stored token is dead and the next run gets
+# 400 refresh_token_already_used. keep the error actionable.
 $body = @{ grant_type = "refresh_token"; refresh_token = $refreshToken } | ConvertTo-Json
 $h = @{ "Content-Type" = "application/json" }
 $r = Invoke-WebRequest -Uri "https://$issuer/auth/v1/token?grant_type=refresh_token" -Method Post -Body $body -Headers $h -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 30
-if ($r.StatusCode -ne 200) { throw "refresh failed HTTP $($r.StatusCode): $($r.Content.Substring(0, [Math]::Min(200, $r.Content.Length)))" }
+if ($r.StatusCode -ne 200) {
+    $body_text = $r.Content.ToString()
+    if ($body_text -match 'refresh_token_already_used') {
+        throw "dashboard session expired (refresh_token_already_used) - the stored refresh token was already consumed (previous run crashed between refresh and vault save). re-login: agent-browser open https://supabase.com/dashboard/sign-in, sign in as $Email, then run: agent-browser eval ""localStorage.getItem('supabase.dashboard.auth.token')"" and save the refresh_token as Dashboard Session ($issuer|<refresh_token>) in the supabase.com vault item. details: HTTP $($r.StatusCode): $($body_text.Substring(0, [Math]::Min(200, $body_text.Length)))"
+    }
+    throw "refresh failed HTTP $($r.StatusCode): $($body_text.Substring(0, [Math]::Min(200, $body_text.Length)))"
+}
 $sess = $r.Content | ConvertFrom-Json
 
-# 4. persist the ROTATED refresh token (write the new one back, keep issuer)
+# 3. persist the ROTATED refresh token (write the new one back, keep issuer)
+# save BEFORE querying daily-stats so a later failure doesn't orphan the rotation
 $newVal = "$issuer|$($sess.refresh_token)"
 Write-VaultSecretToExisting -Email $Email -NamePattern 'supabase.com' -Header 'Dashboard Session' -Value $newVal -ItemName "supabase.com" -Username $Email -Uri 'https://supabase.com/dashboard' | Out-Null
 
-# 3. query the daily-stats endpoints
+# 4. query the daily-stats endpoints
 $authH = @{ Authorization = "Bearer $($sess.access_token)"; Accept = "application/json" }
 $end = (Get-Date).ToString('yyyy-MM-dd')
 $start = (Get-Date).AddDays(-$Days).ToString('yyyy-MM-dd')
@@ -112,7 +123,20 @@ foreach ($a in $attrs) {
         "  {0,-34} {1}" -f $a, $total
     }
 }
-$eg = [Math]::Round($results['total_egress'].total / 1MB, 1)
-$pct = [Math]::Round($eg / 5120 * 100, 1)   # 5 GB free = 5120 MB
+# free egress: total_egress has been 0 every day since project creation
+# (2026-08-20); actual DB egress is in total_supavisor_egress_bytes (pooler).
+# use the max of the two so neither path under-reports. 5 GB free = 5120 MB.
+$egTotal = 0
+foreach ($k in @('total_egress', 'total_supavisor_egress_bytes')) {
+    $v = $results[$k]
+    if ($v -and ($v.total -is [double] -or $v.total -is [int64] -or $v.total -is [int])) {
+        if ($v.total -gt $egTotal) { $egTotal = $v.total }
+    }
+}
+$eg = [Math]::Round($egTotal / 1MB, 1)
+$pct = [Math]::Round($eg / 5120 * 100, 1)
 "  {0,-34} {1} %" -f 'free egress used (of 5 GB)', $pct
+if ($results['total_supavisor_egress_bytes'].total -gt $results['total_egress'].total) {
+    "  (source: supavisor/pooler egress; total_egress was 0 - dashboard counts pooler toward the 5 GB cap)"
+}
 "  refresh token rotated + saved back to vault"
