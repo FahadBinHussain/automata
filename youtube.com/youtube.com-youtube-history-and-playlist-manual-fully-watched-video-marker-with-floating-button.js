@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.2
+// @version      18.3
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube (history, playlists, home, search, subs).
@@ -67,13 +67,6 @@
         .userscript-duplicate-current {
             outline-color:#00e5ff!important; box-shadow:0 0 0 6px rgba(0,229,255,.3)!important;
         }
-        #yt-manual-filter-btn {
-            position:fixed; right:30px; bottom:30px; z-index:99999; padding:15px 20px;
-            border:0; border-radius:4px; background:#c00; color:#fff;
-            box-shadow:0 4px 10px rgba(0,0,0,.5); cursor:pointer;
-            font:700 14px Roboto,Arial,sans-serif; text-transform:uppercase;
-        }
-        #yt-manual-filter-btn:hover { background:#a00; }
         #yt-duplicate-nav {
             position:fixed; right:30px; bottom:92px; z-index:99999; display:none;
             align-items:center; gap:6px; padding:8px; border:1px solid #555;
@@ -94,7 +87,6 @@
     let duplicateEntries = [];
     let duplicateIndex = -1;
     let scanTimer = 0;
-    let feedbackTimer = 0;
     let hoveredCard = null;
     let hoverRestoreTimer = 0;
     // Video IDs seen as fully watched on this page session. During hover the
@@ -104,7 +96,7 @@
     const barSnapshots = new WeakMap();
 
     function isSupportedPage() {
-        // v18.2: run everywhere, not just /feed/history and /playlist. Home,
+        // v18.3: run everywhere, not just /feed/history and /playlist. Home,
         // search, subs, trending, etc. all render the same card types, and the
         // custom .ytp-thumb-bar progress comes from the neon tracker, so dimming
         // fully-watched videos works on every YouTube surface.
@@ -270,7 +262,7 @@
         updateNavigation();
     }
 
-    function runFilterOnce(showFeedback = true) {
+    function runFilterOnce() {
         if (!isSupportedPage()) return;
         const fullyWatched = [];
         const byVideoId = new Map();
@@ -326,32 +318,16 @@
         updateNavigation();
 
         console.log(`Filter complete. Fully watched: ${fullyWatched.length}; duplicate entries: ${duplicateEntries.length}.`);
-        if (showFeedback) {
-            const button = document.getElementById('yt-manual-filter-btn');
-            if (button) {
-                clearTimeout(feedbackTimer);
-                button.textContent = `WATCHED ${fullyWatched.length} · DUPES ${duplicateEntries.length}`;
-                feedbackTimer = setTimeout(() => { button.textContent = 'MARK WATCHED'; }, 2500);
-            }
-        }
     }
 
     function scheduleScan() {
         if (!isSupportedPage()) return;
         clearTimeout(scanTimer);
-        scanTimer = setTimeout(() => runFilterOnce(false), 350);
+        scanTimer = setTimeout(() => runFilterOnce(), 350);
     }
 
     function createInterface() {
         if (!isSupportedPage() || !document.body) return;
-        if (!document.getElementById('yt-manual-filter-btn')) {
-            const button = document.createElement('button');
-            button.id = 'yt-manual-filter-btn';
-            button.type = 'button';
-            button.textContent = 'MARK WATCHED';
-            button.addEventListener('click', () => runFilterOnce(true));
-            document.body.appendChild(button);
-        }
         if (isHistoryPage() && !document.getElementById('yt-duplicate-nav')) {
             const nav = document.createElement('div');
             nav.id = 'yt-duplicate-nav';
@@ -377,7 +353,6 @@
 
     function removeInterface() {
         clearTimeout(scanTimer);
-        document.getElementById('yt-manual-filter-btn')?.remove();
         document.getElementById('yt-duplicate-nav')?.remove();
         document.querySelectorAll('.userscript-watched-dimmed,.userscript-duplicate-watched,.userscript-duplicate-current')
             .forEach((card) => card.classList.remove(
