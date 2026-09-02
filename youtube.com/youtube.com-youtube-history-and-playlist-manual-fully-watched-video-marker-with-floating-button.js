@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.1
+// @version      18.2
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube (history, playlists, home, search, subs).
@@ -104,11 +104,19 @@
     const barSnapshots = new WeakMap();
 
     function isSupportedPage() {
-        // v18.1: run everywhere, not just /feed/history and /playlist. Home,
+        // v18.2: run everywhere, not just /feed/history and /playlist. Home,
         // search, subs, trending, etc. all render the same card types, and the
         // custom .ytp-thumb-bar progress comes from the neon tracker, so dimming
         // fully-watched videos works on every YouTube surface.
         return true;
+    }
+
+    // Duplicate detection is a history-page feature: it flags the same fully-
+    // watched video listed twice in the history feed. Everywhere else the same
+    // video can legitimately appear in several sections (home rows, subs,
+    // channel grids), so never mark it as a duplicate outside history.
+    function isHistoryPage() {
+        return location.pathname.replace(/\/+$/, '') === '/feed/history';
     }
 
     // YouTube nests card renderers (ytd-rich-item-renderer wraps yt-lockup-view-
@@ -301,7 +309,9 @@
         fullyWatched.forEach((card) => card.classList.add('userscript-watched-dimmed'));
 
         const duplicates = [];
-        byVideoId.forEach((entries) => { if (entries.length > 1) duplicates.push(...entries); });
+        if (isHistoryPage()) {
+            byVideoId.forEach((entries) => { if (entries.length > 1) duplicates.push(...entries); });
+        }
         const duplicateSet = new Set(duplicates);
         document.querySelectorAll('.userscript-duplicate-watched').forEach((card) => {
             if (!duplicateSet.has(card)) {
@@ -342,7 +352,7 @@
             button.addEventListener('click', () => runFilterOnce(true));
             document.body.appendChild(button);
         }
-        if (!document.getElementById('yt-duplicate-nav')) {
+        if (isHistoryPage() && !document.getElementById('yt-duplicate-nav')) {
             const nav = document.createElement('div');
             nav.id = 'yt-duplicate-nav';
             nav.setAttribute('role', 'navigation');
