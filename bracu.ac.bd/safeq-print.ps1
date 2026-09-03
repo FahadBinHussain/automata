@@ -4,6 +4,7 @@ param(
     [string]$LocalUser = '',
     [string]$Password = '',
     [string]$Printer = 'Campus.Printer',
+    [string]$SumatraExe = 'C:\Users\Public\SafeQPrint\SumatraPDF.exe',
     [switch]$NoElevate
 )
 
@@ -48,14 +49,27 @@ if (-not $NoElevate) {
 $pwd = ConvertTo-SecureString $Password -AsPlainText -Force
 $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$LocalUser", $pwd)
 
-# inner powershell prints the file N times under the student account.
-# note: Out-Printer sends text content; for pdfs that render nothing, print the pdf
-# from the interactive id session instead (see README gotchas).
+# inner command prints the file ONCE under the student account; the outer loop
+# below repeats it $Copies times so each copy is a separate spooler job.
+# (older version looped $Copies times in BOTH loops = Copies^2 jobs.)
+# pdfs render via SumatraPDF -print-to (silent); plain text via Out-Printer.
+# note: Out-Printer sends raw text content, so it must never be used for pdfs.
+$isPdf = $File -match '\.pdf$'
+if ($isPdf -and -not (Test-Path $SumatraExe)) { Write-Error "SumatraPDF not found: $SumatraExe"; exit 1 }
 $escapedFile = $File.Replace("'", "''")
 $escapedPrinter = $Printer.Replace("'", "''")
 $innerLog = Join-Path $env:TEMP 'safeq-print-inner.log'
 Remove-Item $innerLog -ErrorAction SilentlyContinue
-$inner = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"`$log='$innerLog'; Get-Date -Format o | Out-File `$log -Append; whoami | Out-File `$log -Append; `$n=$Copies; for (`$i=1; `$i -le `$n; `$i++) { Get-Content '$escapedFile' -ErrorAction SilentlyContinue | Out-Printer -Name '$escapedPrinter' -ErrorAction SilentlyContinue }; 'printed' | Out-File `$log -Append`""
+# the inner processes run as the student account, which cannot write to the
+# admin's TEMP by default - pre-create the file and grant Users write access.
+New-Item $innerLog -ItemType File -Force | Out-Null
+icacls $innerLog /grant 'BUILTIN\Users:(W)' /q | Out-Null
+if ($isPdf) {
+    $escapedSumatra = $SumatraExe.Replace("'", "''")
+    $inner = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"`$log='$innerLog'; Get-Date -Format o | Out-File `$log -Append; whoami | Out-File `$log -Append; & '$escapedSumatra' -print-to '$escapedPrinter' -print-settings 'fit' -silent -exit-on-print '$escapedFile'; `"exit `$LASTEXITCODE`" | Out-File `$log -Append`""
+} else {
+    $inner = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"`$log='$innerLog'; Get-Date -Format o | Out-File `$log -Append; whoami | Out-File `$log -Append; Get-Content '$escapedFile' -ErrorAction SilentlyContinue | Out-Printer -Name '$escapedPrinter' -ErrorAction SilentlyContinue; 'printed' | Out-File `$log -Append`""
+}
 
 for ($i = 1; $i -le $Copies; $i++) {
     "copy $i/$Copies ..." | Out-File $log -Append
