@@ -37,14 +37,37 @@ printer.
 - `.env.local` - personal values (student id, password, printer/server), gitignored.
 - `.env.example` - placeholder template for `.env.local`.
 
+## account password policy
+
+this machine enforces **minimum password length 8** (`net accounts`). the
+student-id local account password must be 8+ chars or `New-LocalUser` throws
+`InvalidPasswordException` (e.g. a 7-char password fails). always verify
+length before creating the account; ask the user for a compliant password
+instead of inventing one.
+
+## staging dir
+
+the file to print AND `SumatraPDF.exe` must be readable by the student account,
+so stage both under `C:\Users\Public\SafeQPrint\` (BUILTIN\Users RX granted).
+files under the admin's own profile (Downloads, scoop apps) are NOT readable
+from the `Start-Process -Credential` context. same for WRITES: the inner
+processes cannot write logs to the admin's TEMP, so the script pre-creates
+the inner log file and grants `BUILTIN\Users` write access to it.
+
 ## notes / gotchas
 
 - `pwsh.exe` fails to launch via `Start-Process -Credential` ("access denied"), but
   `cmd.exe` works - so the inner command goes through `cmd.exe /c`.
 - acrobat's `Acrobat.exe /t file.pdf Printer` crashes (0xC0000005) when run under a
-  non-interactive/hidden `Start-Process -Credential` context; text prints via
-  `powershell.exe ... Out-Printer` work fine. for pdf files, either print from the
-  interactive id session, or render the pdf to pcl/printable content first.
+  non-interactive/hidden `Start-Process -Credential` context; pdfs print via
+  portable `SumatraPDF.exe -print-to ... -silent -exit-on-print` staged in the
+  shared dir above (scoop `sumatrapdf`, exe copied out since the student account
+  cannot read the admin's scoop folder). text files print via
+  `powershell.exe ... Out-Printer`; never pipe a pdf through Out-Printer (it
+  sends raw bytes as text = garbage pages).
+- copies-squared bug (fixed): the old script looped `$Copies` times in the outer
+  loop AND `$Copies` times inside the inner command = Copies^2 jobs. the inner
+  command now prints exactly once; the outer loop owns the repeat count.
 - secedit /configure is broken on this machine (always prints usage), so do NOT rely
   on granting "log on as a batch job"; the `Start-Process -Credential` route works
   without it.
