@@ -79,3 +79,20 @@ names, so it can pick a BluRay/BRRip sub (best for BluRay encodes).
   iterated the wrong item and failed with `Move-Item: Destination path cannot
   be a subdirectory of the source or the source itself: ...\s01\s01.`.
   Detection now uses `Test-Path -LiteralPath $r.Path -PathType Container`.
+- **cross-season contamination is the common mismatch mode (seen 2026-09-03)**:
+  a whole batch of SHIELD S01 files (E09, E12–E14, E16–E21) carried S02/S03
+  dialogue. audit trick: scan every srt for later-season proper nouns
+  (Diviner/Whitehall/Jiaying/Daisy/Terrigen/ATCU/Mack/Hunter/Bobbi for S01;
+  case-sensitive `\bMack\b` etc. to dodge "flash drive"/"flash point" false
+  hits on `lash`, and "trip" the english word vs Triplett). legit exceptions:
+  `Kree` in S01E15 (Sif names alien races), `Werner Reinhardt` in S02E08
+  (Whitehall-origin episode), `framework` as an ordinary noun.
+- **opensubtitles dl bot-wall (2026-09-03)**: plain `curl.exe` to
+  `dl.opensubtitles.org/...` can return a 5.7KB "not a bot!" HTML page instead
+  of the srt (direct egress). retry through mihomo socks with a browser UA:
+  `curl.exe -s -L --socks5-hostname 127.0.0.1:7891 -A "<chrome UA>" -o out.srt
+  <url>` — always validate the download (must contain 100+ `-->` cues, no
+  `<html`). python `urllib` to `sub.wyzie.io` gets 403; `curl.exe` works.
+- **alass from python subprocess needs the shell**: bare `alass` fails with
+  `[WinError 2]` under `subprocess.run` (it's `scoop\shims\alass.cmd` — run
+  alass from powershell, or `shell=True`, or invoke `alass.cmd`).
