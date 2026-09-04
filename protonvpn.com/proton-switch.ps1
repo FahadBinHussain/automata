@@ -24,7 +24,11 @@ function Get-Session {
   $base = Get-Content $session -Raw | ConvertFrom-Json
   $uid, $rt = $base.session.UID, $base.session.RefreshToken
   $body = @{ GrantType = 'refresh_token'; RefreshToken = $rt; UID = $uid; RedirectURI = 'protonvpn://proton.me' } | ConvertTo-Json -Compress
-  $r = Invoke-RestMethod -Uri 'https://account.proton.me/api/auth/v4/refresh' -Method Post -ContentType 'application/json' -Body $body -Headers @{ 'x-pm-appversion' = 'Other' } -TimeoutSec 20
+  try {
+    $r = Invoke-RestMethod -Uri 'https://account.proton.me/api/auth/v4/refresh' -Method Post -ContentType 'application/json' -Body $body -Headers @{ 'x-pm-appversion' = 'Other' } -TimeoutSec 20
+  } catch {
+    throw "proton session refresh failed (account may be rate-limited or logged out): $($_.Exception.Message)"
+  }
   if ($r.Code -ne 1000) { throw "proton refresh failed: $($r.Code) $($r.Error)" }
   $base.session.AccessToken = $r.AccessToken
   $base.session.RefreshToken = $r.RefreshToken
@@ -87,7 +91,10 @@ switch ($args[0]) {
   }
   default {
     $want = $args[0]
-    $all = Get-Logicals
+    try { $all = Get-Logicals } catch {
+      Write-Output "proton API unreachable: $($_.Exception.Message)"
+      throw
+    }
     $pick = $all | Where-Object { $_.Name -eq $want } | Select-Object -First 1
     if (-not $pick) { $pick = $all | Where-Object { $_.ExitCountry -eq $want -and $_.Name -notmatch 'TOR|Secure' } | Sort-Object Load | Select-Object -First 1 }
     if (-not $pick) { $pick = $all | Where-Object { $_.Name -like "*$want*" } | Sort-Object Load | Select-Object -First 1 }
@@ -98,7 +105,13 @@ switch ($args[0]) {
     "connecting: $($pick.Name) ($endpoint, load $($pick.Load)%)"
 
     Stop-Tunnel
-    $ovpn = Get-Ovpn $pick.ID 'tcp'
+    try {
+      $ovpn = Get-Ovpn $pick.ID 'tcp'
+    } catch {
+      Stop-Tunnel
+      Write-Output "proton config fetch failed: $($_.Exception.Message)"
+      throw
+    }
     # pin endpoint to the actual physical server (config may use domain)
     $ovpn = $ovpn -replace '(?m)^remote \S+', "remote $endpoint"
     Set-Content $ovpnPath $ovpn -Encoding ASCII
