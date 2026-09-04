@@ -15,10 +15,10 @@
 - **official WireGuard / OpenVPN client + free `.conf` / `.ovpn` from `account.protonvpn.com`** — third-party clients never run `ProtonVPN.Service`, so no WFP block. `AllowedIPs 0.0.0.0/0` via WireGuard still wins longest-prefix against `<lan-cidr>`, so LAN stays via more-specific route — **but** WireGuard's own WFP (for AllowedIPs) and OpenVPN's DCO WFP (`Added block filters for all interfaces`, `permit for exe_path` / `permit for VPN interface`) still block LAN/tailscale at the WFP layer even when routing is correct. verified:
   - WireGuard `0.0.0.0/0` → `lan: 11050` (WFP veto)
   - WireGuard public-only `0.0.0.0/5,8.0.0.0/7,...` (single-line, `DNS 1.1.1.1`, endpoint host route pre-added) → `lan: True` but `exit: timeout` (DNS via `10.2.0.1` blocked by leftover Proton dns callout, plus endpoint loop)
-  - OpenVPN `udp` `185.177.124.84:80` with correct auth `REDACTED` + `REDACTED` → `VERIFY OK` then `AUTH_FAILED` with account password, `VERIFY OK` then `AUTH_FAILED` with wireguard priv as password, `VERIFY OK` → `Peer Connection Initiated` but no `Initialization Sequence Completed` until correct password used
+  - OpenVPN `udp` `185.177.124.84:80` with correct openvpn/IKEv2 auth (creds in vault, NOT account password) → `VERIFY OK` then `AUTH_FAILED` with account password, `VERIFY OK` then `AUTH_FAILED` with wireguard priv as password, `VERIFY OK` → `Peer Connection Initiated` but no `Initialization Sequence Completed` until correct password used
   - OpenVPN `tcp` `185.177.124.84:7770` with correct auth → `Initialization Sequence Completed`, `exit: 185.177.124.100` (NL), `lan: True` **but** `tailscale ping <ts-desktop-ip> → no reply` (OpenVPN WFP only permits `openvpn.exe`, not `tailscaled.exe`, even though `100.64.0.0/10` is more-specific)
 
-- **configs generated:** `C:\tmp\sbx\wg\nl-free.conf` (NL-FREE#212, 185.132.178.52:51820, persistent cert expires 2027-09-03), `jp-free.conf`, `ro-free.conf` via `hatemosphere/protonvpn-wg-confgen` (SRP + `hv-token REDACTED` CAPTCHA). same session at `<user-home>\.protonvpn-session.json` also yields `.ovpn` via `https://account.protonvpn.com/api/vpn/config?Platform=Windows&Protocol=tcp&LogicalID=...` (200, `application/octet-stream`, 5.1KB).
+- **configs generated:** `<wg-path>\nl-free.conf` (NL-FREE#212, <proton-wg-endpoint>, persistent cert expires 2027-09-03), `jp-free.conf`, `ro-free.conf` via `hatemosphere/protonvpn-wg-confgen` (SRP + hv CAPTCHA token — never commit it). same session at `<home>/.protonvpn-session.json` also yields `.ovpn` via `https://account.protonvpn.com/api/vpn/config?Platform=Windows&Protocol=tcp&LogicalID=...` (200, `application/octet-stream`, 5.1KB).
 
 ## 3. windows WFP — what does NOT work (verified)
 
@@ -43,7 +43,7 @@ only `netsh wfp show state` + removing the provider, or the in-app `Allow LAN �
 
 - direct (no vpn): `exit <isp-exit-ip>`, `lan <lan-desktop-ip>: Success`, `tailscale ping via DERP 98-103ms` (direct not established, relay)
 - wireguard `nl-fixed` public-only (single-line, DNS 1.1.1.1): `Running`, `lan: True`, `exit: timeout` (endpoint loop), `tailscale: no reply` — WFP still blocks
-- openvpn `tcp` `nl-free-79.protonvpn.udp.ovpn` + `nl-free-tcp.ovpn` with `auth-ovpn.txt` (`REDACTED` + `REDACTED...`): `Initialization Sequence Completed`, `exit 185.177.124.100`, `lan: True`, `tailscale: no reply` — same WFP permit-exe_path issue
+- openvpn `tcp` `nl-free-79.protonvpn.udp.ovpn` + `nl-free-tcp.ovpn` with `auth-ovpn.txt` (openvpn/IKEv2 creds, in vault): `Initialization Sequence Completed`, `exit 185.177.124.100`, `lan: True`, `tailscale: no reply` — same WFP permit-exe_path issue
 - after `taskkill ProtonVPNService` + `advfirewall reset`: `direct <isp-exit-ip>`, `lan: True` restored, but `wfpstate.xml` still `3` Proton entries (in-memory, needs BFE restart as SYSTEM — `net stop BFE /y` → `Access is denied` even as SYSTEM, PPL)
 
 ## 6. what actually keeps vpn+tailscale+lan together on free
@@ -72,14 +72,14 @@ gotchas that caused total internet drop (openvpn up, no data):
    route delete. fix: disable/enable DCO+TAP adapters, delete leftover host routes.
 3. always add `disable-dco` to proton .ovpn (dco connect error errno=5 otherwise).
 4. pre-pin endpoint route via lan gw: route add 185.177.124.84 mask 255.255.255.255 <lan-gw> metric 1
-5. watchdog C:\tmp\sbx\wg\vpn-watchdog.ps1: if no internet within 50s, kill openvpn
+5. watchdog <wg-path>\vpn-watchdog.ps1: if no internet within 50s, kill openvpn
    (never stay offline silently).
 
 connect order:
   tailscale set --exit-node=
   route add <proton-endpoint> mask 255.255.255.255 <lan-gw> metric 1
   openvpn --config nl-tcp-nodco.ovpn --auth-user-pass auth-ovpn.txt
-auth-ovpn.txt = openvpn/IKEv2 creds (line1 user REDACTED..., line2 pass REDACTED), NOT wg login.
+auth-ovpn.txt = openvpn/IKEv2 creds (stored locally, in vault — never commit), NOT wg login.
 wfp state: proton filters effectively GONE (ssh over 100.x works while vpn up).
 
 ## account limitation incident (2026-09-04 10:0x local)
@@ -91,6 +91,6 @@ plus SRP modulus key rotated -> "Invalid modulus" -> verify bypass -> repeated l
 lesson: NEVER retry proton /auth in a loop. one attempt per hour max. the openvpn creds
 (auth-ovpn.txt) and saved .ovpn configs work without any API - static connect is always
 available. working reauth script (monkeypatches cert_pinning + skips gpg modulus verify)
-is at C:\tmp\sbx\wg\reauth6.py - run it ONCE when the limit lifts, it saves fresh tokens
+is at <wg-path>\reauth6.py - run it ONCE when the limit lifts, it saves fresh tokens
 to ~/.protonvpn-session.json for proton-switch.ps1.
 
