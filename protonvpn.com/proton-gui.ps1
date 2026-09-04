@@ -98,30 +98,41 @@ function Update-Status {
 }
 
 $btnRefresh.Add_Click({
-  Update-Status
-  $list.Items.Clear()
-  foreach ($s in (Get-FreeServers)) { [void]$list.Items.Add($s) }
+  try {
+    Update-Status
+    $list.Items.Clear()
+    foreach ($s in (Get-FreeServers)) { [void]$list.Items.Add($s) }
+  } catch { Write-Log ("refresh error: " + $_.Exception.Message) }
 })
 
 $btnOff.Add_Click({
-  Write-Log 'disconnecting...'
-  & pwsh -NoProfile -File $switch off | Out-Null
-  Update-Status
-  Write-Log 'disconnected (direct)'
+  try {
+    Write-Log 'disconnecting...'
+    & pwsh -NoProfile -File $switch off 2>&1 | ForEach-Object { Write-Log ($_.ToString()) }
+    Update-Status
+    Write-Log 'done'
+  } catch { Write-Log ("disconnect error: " + $_.Exception.Message) }
 })
 
 $btnConnect.Add_Click({
-  if ($list.SelectedItem -eq $null) { Write-Log 'pick a server first'; return }
-  $sel = $list.SelectedItem.ToString() -replace '\s.*$', ''
-  Write-Log "connecting to $sel (window may pause ~30s)..."
-  $form.Refresh()
-  $out = & pwsh -NoProfile -File $switch $sel 2>&1
-  foreach ($l in $out) { Write-Log ($l | Out-String).Trim() }
-  Update-Status
+  try {
+    if ($list.SelectedItem -eq $null) { Write-Log 'pick a server first'; return }
+    $sel = $list.SelectedItem.ToString() -replace '\s.*$', ''
+    Write-Log "connecting to $sel (window may pause ~30s)..."
+    $form.Refresh()
+    $out = & pwsh -NoProfile -File $switch $sel 2>&1
+    foreach ($l in $out) { Write-Log ($l | Out-String).Trim() }
+    Update-Status
+  } catch {
+    Write-Log ("connect FAILED: " + $_.Exception.Message)
+    Write-Log 'if this says rate-limited: wait, then run reauth6.py once'
+  }
 })
 
 # init: load servers + status
-foreach ($s in (Get-FreeServers)) { [void]$list.Items.Add($s) }
-Update-Status
+try {
+  foreach ($s in (Get-FreeServers)) { [void]$list.Items.Add($s) }
+} catch { Write-Log ("server list error: " + $_.Exception.Message) }
+try { Update-Status } catch { $status.Text = 'status check failed - click Refresh' }
 
 [void]$form.ShowDialog()
