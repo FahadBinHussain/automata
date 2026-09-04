@@ -75,12 +75,14 @@ switch ($args[0]) {
   }
   'status' {
     try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 12).Trim(); "vpn exit: $ip" } catch { "vpn: not connected (direct)" }
+    if (Test-Path "$wg\state.txt") { "server: $(Get-Content "$wg\state.txt" -Raw)" }
     $c = Test-Coexistence
     "lan: $($c.Lan)  tailscale-ssh: $($c.Ts)"
     Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -like '*OpenVPN*' } | ForEach-Object { "tunnel ip: $($_.IPAddress)" }
   }
   'off' {
     Stop-Tunnel
+    Remove-Item "$wg\state.txt" -ErrorAction SilentlyContinue
     "tunnel down (direct)"
   }
   default {
@@ -122,7 +124,9 @@ switch ($args[0]) {
     }
     $c = Test-Coexistence
     "vpn exit: $ip"
+    "server: $($pick.Name)"
     "lan: $($c.Lan)  tailscale-ssh: $($c.Ts)"
     if (-not $c.Ts) { "WARNING: tailscale blocked on this server!" }
+    Set-Content "$wg\state.txt" $pick.Name -Encoding UTF8
   }
 }
