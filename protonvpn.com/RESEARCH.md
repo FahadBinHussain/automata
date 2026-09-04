@@ -81,3 +81,16 @@ connect order:
   openvpn --config nl-tcp-nodco.ovpn --auth-user-pass auth-ovpn.txt
 auth-ovpn.txt = openvpn/IKEv2 creds (line1 user REDACTED..., line2 pass REDACTED), NOT wg login.
 wfp state: proton filters effectively GONE (ssh over 100.x works while vpn up).
+
+## account limitation incident (2026-09-04 10:0x local)
+proton locked the account temporarily: "Our systems detected unusual activity targeting
+your account. To protect you ... temporarily limited access" from POST /auth (SRP login).
+cause: rapid auth attempts from python reauth scripts (the old `proton` pip lib is broken
+with urllib3 v2: cert_pinning.py passes `strict` positionally -> lands in timeout slot;
+plus SRP modulus key rotated -> "Invalid modulus" -> verify bypass -> repeated logins).
+lesson: NEVER retry proton /auth in a loop. one attempt per hour max. the openvpn creds
+(auth-ovpn.txt) and saved .ovpn configs work without any API - static connect is always
+available. working reauth script (monkeypatches cert_pinning + skips gpg modulus verify)
+is at C:\tmp\sbx\wg\reauth6.py - run it ONCE when the limit lifts, it saves fresh tokens
+to ~/.protonvpn-session.json for proton-switch.ps1.
+
