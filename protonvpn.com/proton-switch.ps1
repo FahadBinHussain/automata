@@ -12,6 +12,14 @@ $auth = "$wg\auth-ovpn.txt"
 $session = "$env:USERPROFILE\.protonvpn-session.json"
 $ovpnPath = "$wg\current.ovpn"
 
+# personal values from <folder>\.env.local (gitignored)
+foreach ($line in Get-Content "$PSScriptRoot\.env.local" -ErrorAction SilentlyContinue) {
+  if ($line -match '^([A-Z_]+)=(.+)$') { Set-Variable -Name $Matches[1] -Value $Matches[2].Trim() }
+}
+$LAN_GW = if ($LAN_GW) { $LAN_GW } else { '<lan-gw>' }
+$LAN_DESKTOP_IP = if ($LAN_DESKTOP_IP) { $LAN_DESKTOP_IP } else { '<lan-desktop-ip>' }
+$TS_DESKTOP_IP = if ($TS_DESKTOP_IP) { $TS_DESKTOP_IP } else { '<ts-desktop-ip>' }
+
 function Get-Session {
   $base = Get-Content $session -Raw | ConvertFrom-Json
   $uid, $rt = $base.session.UID, $base.session.RefreshToken
@@ -45,8 +53,8 @@ function Stop-Tunnel {
 }
 
 function Test-Coexistence {
-  $lan = Test-Connection <lan-desktop-ip> -Count 1 -Quiet
-  $ts = Test-NetConnection <ts-desktop-ip> -Port 22 -WarningAction SilentlyContinue -InformationLevel Quiet
+  $lan = Test-Connection $LAN_DESKTOP_IP -Count 1 -Quiet
+  $ts = Test-NetConnection $TS_DESKTOP_IP -Port 22 -WarningAction SilentlyContinue -InformationLevel Quiet
   @{ Lan = $lan; Ts = $ts }
 }
 
@@ -95,7 +103,7 @@ switch ($args[0]) {
 
     # pre-pin endpoint route via lan gateway so tunnel traffic never enters tailscale
     route delete $endpoint mask 255.255.255.255 2>$null | Out-Null
-    route add $endpoint mask 255.255.255.255 <lan-gw> metric 1 | Out-Null
+    route add $endpoint mask 255.255.255.255 $LAN_GW metric 1 | Out-Null
 
     Remove-Item "$wg\current.log" -ErrorAction SilentlyContinue
     Start-Process -FilePath 'C:\Program Files\OpenVPN\bin\openvpn.exe' -ArgumentList '--config', $ovpnPath, '--auth-user-pass', $auth, '--log', "$wg\current.log", '--verb', '3' -WindowStyle Hidden
