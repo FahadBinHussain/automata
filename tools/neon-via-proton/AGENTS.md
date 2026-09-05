@@ -46,6 +46,18 @@ Invoke-WebRequest -Uri "http://127.0.0.1:10813/proxies/GLOBAL" -Method PUT `
 (Invoke-RestMethod http://127.0.0.1:10813/proxies/GLOBAL).now   # -> PROXY
 ```
 
+## mihomo boot timing (learned 2026-09-05)
+
+- after relaunch the core can take 35-60s before socks + controller bind — it
+  health-checks providers first. do NOT assume dead after 10-20s of no
+  listeners; poll `Get-NetTCPConnection -State Listen` for the exact ports
+  read from `binConfigs/config.json`.
+- `Start DNS server(UDP) error: listen udp 0.0.0.0:5353: bind: ...` in the
+  boot log is NON-FATAL (something else holds 5353); socks + controller still
+  come up. capture the log with `-RedirectStandardOutput` on the
+  `Start-Process` call to tell a slow boot apart from a real failure
+  (e.g. the `global-client-fingerprint` config error, also non-fatal).
+
 ## Relay
 
 `socks5-fwd.ps1` listens on 127.0.0.1:5433 and forwards via socks to Neon.
