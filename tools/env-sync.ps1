@@ -29,7 +29,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-Import-Module "<user-home>\Downloads\mainframe\vault-secret.psm1" -Force
+Import-Module "$env:USERPROFILE\Downloads\mainframe\vault-secret.psm1" -Force
 if (-not (Test-VaultSession)) { throw 'Bitwarden vault is locked. Run automata\bitwarden.com\unlock.ps1 first.' }
 
 $items = Get-VaultItems
