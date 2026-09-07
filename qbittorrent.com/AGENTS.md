@@ -8,6 +8,14 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
   never silently downgrade to 1080p — if no 4K release exists (or none has
   seeds) after a real search, say so loudly and ask instead of grabbing 1080p.
   `yts.lt\search.ps1` already defaults to 4K-first picking.
+- **check ALL torrent sources before adding (user rule 2026-09-07)**: never
+  YTS-only out of habit. query `yts.lt`, `rutor.info`, `knaben.org`, and
+  `thepiratebay.org` `search.ps1` scripts in parallel, then pick the best 4K
+  across all of them: BluRay/REMUX > WEB, then seeds, then sane size.
+  (1337x search is a honeypot — `1337x.to\get-magnet.ps1` for detail pages
+  only, never its search.) if a worse copy was already added, delete that
+  torrent (form body `hashes=<lowercase>&deleteFiles=false` when nothing
+  downloaded yet) so only the best copy downloads.
 
 ## scripts
 
