@@ -4,7 +4,10 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
 
 ## pick rules
 
-- **4K first, 1080p floor** (user rule): always prefer 2160p when it exists with seeds; fall back to 1080p; never below 1080p (unless nothing >=1080p exists, e.g. shorts/SD-only extras). `yts.lt\search.ps1` enforces this by default (`-Allow720` to relax).
+- **4K always (user rule 2026-09-06)**: always download the 2160p release.
+  never silently downgrade to 1080p — if no 4K release exists (or none has
+  seeds) after a real search, say so loudly and ask instead of grabbing 1080p.
+  `yts.lt\search.ps1` already defaults to 4K-first picking.
 
 ## scripts
 
