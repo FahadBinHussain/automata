@@ -52,6 +52,7 @@ function Get-RepoSlug($dir) {
 }
 
 function Is-EnvName($rel) {
+    if ($rel -match '\s+\(exact\)$') { return $true }
     return $rel -match '\.env(\s+\((development|production|exact)\))?$'
 }
 
