@@ -1,7 +1,8 @@
 # env-sync: restore .env + secret key files from vault into repo clones.
 # vault items are named "github.com/<owner>/<repo> / <relative/path>" - the slug
 # after github.com/ is the real GitHub repo, and the name after " / " is the
-# path the file restores to (env variants carry "(development)"/"(production)").
+# path the file restores to (env variants carry "(development)"/"(production)";
+# "(exact)" restores a literal ".env" path with no .local mapping).
 #
 # repos are matched by their git remote URL, NOT by the local folder name
 # (some folders and GitHub slugs differ, e.g. underscores vs hyphens).
@@ -51,11 +52,16 @@ function Get-RepoSlug($dir) {
 }
 
 function Is-EnvName($rel) {
-    return $rel -match '\.env(\s+\((development|production)\))?$'
+    return $rel -match '\.env(\s+\((development|production|exact)\))?$'
 }
+
+# env items: ".env (development)" -> relative ".env", then written as .env.local.
+# ".env (exact)" restores the literal path as-is (for apps that read a bare
+# ".env", e.g. python-dotenv or scripts with an explicit path) - no .local added.
 
 # env items: ".env (development)" -> relative ".env", then written as .env.local
 function Env-RelPath($rel) {
+    if ($rel -match '\s+\(exact\)\s*$') { return ($rel -replace '\s+\(exact\)\s*$', '') }
     $base = $rel -replace '\s+\((development|production)\)\s*$', ''
     if ($base -match '\.env$') { return "$base.local" }
     return $base
