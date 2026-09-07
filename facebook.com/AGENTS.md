@@ -40,12 +40,25 @@ runs cookie-health.ps1 every 30 min forever in the foreground, color-coded, wind
 (at logon, InteractiveToken, LeastPrivilege, ExecutionTimeLimit PT0S, IgnoreNew).
 manual: `pwsh -NoExit -File lumen-cookie-health-watch.ps1 [-IntervalMinutes N]`.
 per-check details still land in the same $env:TEMP\lumen-cookie-health.log.
+**the visible window IS the watchdog**: closing it stops all checks until next
+logon (the task only fires at logon) - relaunch with
+`schtasks /run /tn "lumen-cookie-health-watch"`. diagnose death via the window
+process (`-File ...lumen-cookie-health-watch.ps1` in the pwsh list) + freshness
+of the log tail; the loop itself never exits on check errors (try/catch).
 
 ## murmur-cookie-refresher.mjs
 
 browserless FB cookie refresher: agent-browser cookie vault -> bridge
 /cookies/upload + reload. invoked by cookie-health.ps1 on threshold hit; can also be
 run standalone with the same env (MURMUR_HF_SPACE_URL, AGENT_BROWSER_EMAIL, HF_EMAIL).
+**refresher env gotcha (2026-09-07)**: the mjs reads ONLY its own process env
+(cookie-health forwards nothing explicitly) + its Bearer token from
+`mainframe/accounts/hf/<HF_EMAIL>/token` (NOT `stored_tokens` - that's a
+placeholder). all three env vars now live in `facebook.com/.env.local`
+(cookie-health loads it per check) and the token file equals the Render
+`ELEMENT_ORION_BRIDGE_NOTIFICATIONS_SECRET`; without them every refresh fails
+(exit 1, "HF_EMAIL not set") while the watchdog keeps reporting healthy.
+cookie-health now logs refresher env readiness before spawning.
 
 ## facebook-watch-unmute.user.js
 

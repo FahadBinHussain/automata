@@ -132,6 +132,18 @@ function Invoke-CookieRefresh {
         return
     }
     $env:MURMUR_HF_SPACE_URL = $BridgeUrl
+    # the refresher (murmur repo, do not edit) reads these three from its own
+    # env — it does NOT read this script's .env.local. normally inherited, but
+    # verify + log BEFORE spawning so the next exit-1 is diagnosable (2026-09-07:
+    # refresh silently failed with "HF_EMAIL not set" while the watchdog kept
+    # reporting, and AGENT_BROWSER_EMAIL was set nowhere in this pipeline).
+    foreach ($k in @("HF_EMAIL", "AGENT_BROWSER_EMAIL")) {
+        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($k, "Process"))) {
+            Log "  refresher env $k : set (len $([Environment]::GetEnvironmentVariable($k, "Process").Length))" Gray
+        } else {
+            Log "  refresher env $k : MISSING - refresh will fail" Red
+        }
+    }
     try {
         $proc = Start-Process -FilePath "node" -ArgumentList $Refresher -PassThru -NoNewWindow
         $proc.WaitForExit()
