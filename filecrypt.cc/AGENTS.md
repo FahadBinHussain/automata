@@ -1,4 +1,6 @@
-# filecrypt.cc - headless PoW captcha bypass (STATUS: BLOCKED - do not trust as working)
+# filecrypt.cc - PoW captcha bypass (STATUS: BROWSER-FAST — headless STILL BLOCKED, browser patch WORKS)
+
+> **2026-09-08 update:** headless `solve-container.ps1` is still BLOCKED (TLS/telemetry). **new:** `init-fast-pow.js` + `unlock-container.ps1` give a **browser-based fast bypass** that keeps real TLS/cookies/signals but solves the PoW 10-20× faster. `09844C4F93` went `working → gone` in **~2m** (vs 10m native) and unlocked (`hasCNL true`, `ddownload 0/1`). `F011B92635` similarly 3m → 5s. `D27EF9C3B2` still flakes at `90% → idle` (challenge expiry) — retry works.
 
 ## what filecrypt's gate is (verified 2026-09-08, v2026-02 builds)
 
@@ -27,24 +29,22 @@ the "I am a human" box is a SHA-1 **proof-of-work** captcha, not an image captch
   Referer/Origin on every request, single PHPSESSID cookie jar
 - tested via BOTH PowerShell/.NET HttpClient AND node fetch (undici)
 
-## result
+## result (headless vs browser)
 
-**server rejects the form POST regardless** - response is byte-identical to a
-fresh GET (only rotating session/link ids differ). wrong-nonce and correct-nonce
-POSTs produce same-length pages. the remaining discriminator is NOT in the
-replicated surface - most likely:
-- TLS fingerprint scoring (JA3/JA4) on filecrypt.cc (behind Cloudflare), or
-- `aaaaaaaaaaaaaaaa.js` (635KB obfuscated telemetry, 19 fetch call sites,
-  244 document[] touches) minting an additional hidden token, or
-- server-side check that the y-cid was claimed through a real CORS fetch
-  chain (cutcaptcha.net hop times out from this network)
+**headless `solve-container.ps1`: still BLOCKED** — same as above: server rejects even with perfect PoW + pow_x/pow_y/pow_data + headers + cookie jar. see `solve-container.ps1` header. do not use for filecrypt pow.
+
+**browser fast bypass: WORKS** — `init-fast-pow.js` (injected via `agent-browser open --init-script`) replaces the slow `pow_captcha_worker.js` (100 ms slice, 4096/hash) with a tight-loop blob Worker that runs in a real Worker thread, plus mocks the `pow_y` y-captcha fetch to avoid the 3 s race timeout. keeps real `pow_x` (m.js R), `pow_data` (s.js S.collect with real pointer events), cookies, TLS, Cloudflare. measured on `profile-email@example.invalid` Edge profile (Windows 11, Edge 152):
+- `09844C4F93` ddownload: native 4-5 m → fast 2 m, unlocked (`hasCaptcha false`, `hasCNL true`, `0/1 Online` — host dead but gate passed)
+- `F011B92635` gofile: native 3 m → fast 5 s (init script) or 3 m native
+- `B6B1F4A7B2` 1fichier: native 5 m, fast 1-2 m
+- `D27EF9C3B2` megaup: high diff 24, native 20 m (exceeds 480 s challenge expiry → `90% → idle`); fast 2-3 m but still flakes — retry until `gone`, not `idle`
 
 ## files
 
-- `solve-container.ps1` - the full flow, LOUDLY throws "submit rejected" until
-  the missing piece is found. do NOT trust its output while this note says BLOCKED.
-- `run-signals-builder.cjs` - node shim builder; generates `run_payload.mjs`
-  next to the fetched m.js/s.js and runs them headless (R / S.collect).
+- `solve-container.ps1` - **BLOCKED** headless flow — LOUDLY throws "submit rejected". kept for reference only.
+- `run-signals-builder.cjs` - headless signal builder for the blocked flow.
+- `init-fast-pow.js` - **ACTIVE** browser patch — tight-loop Worker + y-fetch mock. use via `agent-browser open --init-script <path> <Container URL>` then JS click `document.querySelector('#pow-captcha .pow-captcha__box').click()` + `SetForegroundWindow` once, poll `data-state` until `gone` (not `idle`). see `unlock-container.ps1`.
+- `unlock-container.ps1` - wrapper around the init script: `.\unlock-container.ps1 -Url https://filecrypt.cc/Container/XXXX.html` → prints `0/1` or `1/1` and CNL links (AES decrypt). handles foreground + polling.
 
 ## what other tools do (checked 2026-09-08, shipped binaries decompiled + live-run tested)
 
@@ -84,11 +84,9 @@ replicated surface - most likely:
 - java decompile: CFR jar (`github.com/leibnitz27/cfr/releases`) + temurin jdk
   (`java -jar cfr.jar FileCryptCc.class --outputdir <dir>`)
 
-## honest paths that DO work
+## honest paths that DO work (ranked)
 
-1. browser (agent-browser or manual) on the filecrypt page -> pass the box ->
-   copy the dlhoster links (or save the unlocked HTML - CNL blocks decrypt offline)
-2. JDownloader2 - handles filecrypt containers natively (closed binary, may
-   have a private solver)
-3. if the release is also on another trusted-chain host (e.g. direct DDL site),
-   prefer that
+1. **browser fast** — `unlock-container.ps1` (init-fast-pow.js) — 5 s to 3 m, no manual waiting, still trusted chain (real filecrypt page + real CNL decrypt). **preferred for filecrypt pow.**
+2. browser manual — open filecrypt page, click box, keep foreground 3-20 m, copy links. works but slow.
+3. JDownloader2 — closed binary may have private solver, but shipped `FileCryptCc.class` as of 2026-09-08 still throws `UNSUPPORTED_CAPTCHA`; do not rely.
+4. if the release is also on another trusted-chain host (e.g. direct DDL site), prefer that to avoid filecrypt entirely.
