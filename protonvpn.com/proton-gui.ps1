@@ -30,11 +30,18 @@ $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 
-$status = New-Object System.Windows.Forms.Label
+$status = New-Object System.Windows.Forms.TextBox
 $status.Location = New-Object System.Drawing.Point(12, 10)
-$status.Size = New-Object System.Drawing.Size(380, 56)
-$status.Font = New-Object System.Drawing.Font('Consolas', 10)
+$status.Size = New-Object System.Drawing.Size(380, 52)
+$status.Multiline = $true
+$status.ReadOnly = $true
+$status.Font = New-Object System.Drawing.Font('Consolas', 9)
+$status.BackColor = [System.Drawing.SystemColors]::Window
+$status.ScrollBars = 'None'
+$status.WordWrap = $true
+$status.ShortcutsEnabled = $true
 $status.Text = 'starting... (status check runs in background)'
+$status.TabStop = $false
 $form.Controls.Add($status)
 
 $btnRefresh = New-Object System.Windows.Forms.Button
@@ -76,7 +83,8 @@ $log.ScrollBars = 'Vertical'
 $form.Controls.Add($log)
 
 function Write-Log($msg) {
-  $log.AppendText("$msg`r`n")
+  $ts = Get-Date -Format 'HH:mm:ss'
+  $log.AppendText("[$ts] $msg`r`n")
   $log.SelectionStart = $log.Text.Length
   $log.ScrollToCaret()
 }
@@ -88,13 +96,16 @@ foreach ($s in $fallback) { [void]$list.Items.Add($s) }
 $script:busyJob = $null
 $script:busyMode = ''
 $script:lastStatus = Get-Date
+$script:busySince = $null
 
 function Set-Busy($mode) {
   $script:busyMode = $mode
+  if ($null -ne $script:busyJob) { $script:busySince = Get-Date } else { $script:busySince = $null }
   $busy = ($null -ne $script:busyJob)
   $btnConnect.Enabled = -not $busy
   $btnOff.Enabled = -not $busy
   $btnRefresh.Enabled = -not $busy
+  if ($busy -and $mode -and $mode -ne 'status') { $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor } else { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
 }
 
 function Start-GuiJob([string[]]$cmdArgs) {
@@ -104,6 +115,7 @@ function Start-GuiJob([string[]]$cmdArgs) {
     "EXIT:$LASTEXITCODE"
   } -ArgumentList $switch, $cmdArgs
   Set-Busy $cmdArgs[0]
+  $script:busySince = Get-Date
 }
 
 function Show-StatusOutput($lines) {
@@ -135,6 +147,7 @@ function Start-StatusRefresh {
     param($sw)
     & pwsh -NoProfile -File $sw status 2>&1 | ForEach-Object { $_.ToString() }
   } -ArgumentList $switch
+  Set-Busy 'status'
 }
 
 # UI timer: polls background job + auto-refresh status every 60s
@@ -155,6 +168,18 @@ $timer.Add_Tick({
         Set-Busy $null
         Start-StatusRefresh
       }
+    } else {
+      # live elapsed feedback so long watchdog (60s) doesn't look frozen
+      if ($script:busyMode -and $script:busyMode -ne 'status' -and $script:busySince) {
+        $el = [int]((Get-Date) - $script:busySince).TotalSeconds
+        if ($el -gt 0 -and ($el % 5 -eq 0) -and ($el % 10 -ne 0)) {
+          # nudge status text every 5s without overwriting final result
+          if ($status.Text -notmatch "\(${el}s\)$") {
+            $base = $status.Text -replace '\s*\(\d+s\)$', ''
+            $status.Text = "$base (${el}s)"
+          }
+        }
+      }
     }
   } elseif (((Get-Date) - $script:lastStatus).TotalSeconds -ge 60) {
     Start-StatusRefresh
@@ -162,7 +187,7 @@ $timer.Add_Tick({
 })
 $timer.Start()
 
-$btnRefresh.Add_Click({ try { Start-StatusRefresh; $status.Text = 'checking...' } catch { Write-Log ("refresh error: " + $_.Exception.Message) } })
+$btnRefresh.Add_Click({ try { Start-StatusRefresh; $status.Text = 'checking...'; $status.ForeColor = [System.Drawing.Color]::DarkOrange } catch { Write-Log ("refresh error: " + $_.Exception.Message) } })
 
 $btnOff.Add_Click({
   try {
