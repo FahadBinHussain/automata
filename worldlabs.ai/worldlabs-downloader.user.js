@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.1
+// @version      4.2
 // @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
@@ -464,8 +464,9 @@
     for (const [res, items] of sorted) {
       const sec = document.createElement("div");
       sec.className = "wl-dl-sec";
-      const tagCls = ["full", "3M"].includes(res) ? "tg-hi" : res === "500k" ? "tg-mid" : res === "PLY" ? "tg-ply" : "tg-lo";
-      sec.innerHTML = `<div class="wl-dl-sec-t">${res} (${items.length})</div>`;
+      const tagCls = ["full", "3M", "full_res"].includes(res) ? "tg-hi" : res === "500k" ? "tg-mid" : res === "PLY" ? "tg-ply" : "tg-lo";
+      const best = (res === "full" || res === "full_res" || res === "3M") ? " [best quality]" : "";
+      sec.innerHTML = `<div class="wl-dl-sec-t">${res} (${items.length})${best}</div>`;
 
       for (const item of items) {
         const row = document.createElement("div");
