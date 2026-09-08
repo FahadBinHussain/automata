@@ -24,8 +24,20 @@ account password), `~/.protonvpn-session.json` (api tokens), `.env.local` here
 - **watchdog race (fixed 2026-09-08):** the old watchdog accepted the first
   successful ifconfig.me, which usually answers over direct *before*
   redirect-gateway applies — connect then reported the isp ip as "vpn exit".
-  now `Connect-Ovpn` snapshots the pre-connect direct ip and only succeeds when a
-  tunnel ip exists AND the exit ip differs from direct. 60s max, then kill.
+- **same-server reconnect suicide (fixed 2026-09-08):** the first watchdog fix
+  compared exit ip vs pre-connect direct ip — reconnecting to the SAME server
+  (same exit ip) made a healthy tunnel look "direct" and the watchdog killed it
+  ~60s after init. fix: success requires tunnel ip + ifconfig.me answer +
+  the halved 0.0.0.0/1 + 128.0.0.0/1 routes actually present on the TAP
+  (redirect-gateway applied). the ip-diff check is gone.
+- **udp blocked on this network:** the saved nl/jp/ro ovpns are proto udp;
+  handshakes time out (TLS key negotiation fail on udp ports). `static` now
+  probes tcp 443/8443/7770/80 on the endpoint and rewrites proto/remote to
+  tcp-client itself before connecting. nl `tcp` 8443 and jp `tcp` 443 verified.
+- **orphan halved routes after force-kill:** Stop-Tunnel force-kills openvpn,
+  which skips its route cleanup — leftover 0/1+128/1 via the dead TAP gateway
+  can blackhole ALL internet (direct included). Stop-Tunnel now flushes both
+  routes when no openvpn remains.
 - **shared connect path:** api (`default` branch) and `static` both go through
   `Connect-Ovpn` (endpoint pin, `disable-dco` inject, lan-gw host route, watchdog,
   state.txt). fix connect logic there, not in both branches.
