@@ -46,17 +46,21 @@ replicated surface - most likely:
 - `run-signals-builder.cjs` - node shim builder; generates `run_payload.mjs`
   next to the fetched m.js/s.js and runs them headless (R / S.collect).
 
-## what other tools do (checked 2026-09-08, shipped binaries decompiled)
+## what other tools do (checked 2026-09-08, shipped binaries decompiled + live-run tested)
 
 - **JDownloader 2 v1.8.0.482 (winget-verified installer, decompiled via CFR)**:
   `jd/plugins/decrypter/FileCryptCc.class` line ~577:
   `if (br.containsHTML("/js/pow_captcha.js") && br.containsHTML("name=\"pow_"))`
   -> throws `UNSUPPORTED_CAPTCHA - "Unsupported captcha type 'powcaptcha.com'"`.
-  **the shipped binary CANNOT solve the pow gate either.** it handles:
+  **the shipped binary CANNOT solve the pow gate.** it handles:
   circle captcha (click point), recaptcha v2, cutcaptcha (via their captcha
   service). decompiled source kept at `reference/FileCryptCc.jd2-shipped.java`.
-  update server (update.jdownloader.org) needs signed requests - live plugin
-  version not directly fetchable; a newer solver may exist server-side.
+  - LIVE-RUN TESTED 2026-09-08: installed (build Sep 07 2026 = JDownloaderRevision
+    50639, 1 day old at install = current), ran the app ~15 min across 2 launches,
+    zero plugin updates downloaded (filelist.txt/rev unchanged, updateinterval
+    600s, silent installs on). class sha unchanged
+    `9A841725...421FB18`. **there is no newer solver coming from their update
+    server for this - JD2 genuinely cannot do filecrypt pow containers.**
 - **pyLoad** (`src/pyload/plugins/decrypters/FilecryptCc.py` v0.52, GPLv3):
   handles internal/circle/solvemedia/keycaptcha/coinhive/recaptcha captchas.
   **NO handler for the pow captcha.** kept at `reference/FilecryptCc.pyload.py`.
