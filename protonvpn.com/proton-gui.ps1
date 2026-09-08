@@ -17,6 +17,10 @@ $dir = $PSScriptRoot
 $switch = Join-Path $dir 'proton-switch.ps1'
 $wg = 'C:\tmp\sbx\wg'
 
+# saved .ovpn fallbacks per country (used when the proton api/session is dead;
+# files hold private key material - they stay in C:\tmp\sbx\wg, never in the repo)
+$staticMap = @{ nl = 'nl-tcp-nodco.ovpn'; jp = 'jp-free.ovpn'; ro = 'ro-free.ovpn' }
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Proton VPN switch'
 $form.Size = New-Object System.Drawing.Size(420, 470)
@@ -91,28 +95,33 @@ function Set-Busy($mode) {
   $btnRefresh.Enabled = -not $busy
 }
 
-function Start-GuiJob($mode) {
+function Start-GuiJob([string[]]$cmdArgs) {
   $script:busyJob = Start-Job -ScriptBlock {
     param($sw, $m)
-    & pwsh -NoProfile -File $sw $m 2>&1 | ForEach-Object { $_.ToString() }
+    & pwsh -NoProfile -File $sw @m 2>&1 | ForEach-Object { $_.ToString() }
     "EXIT:$LASTEXITCODE"
-  } -ArgumentList $switch, $mode
-  Set-Busy $mode
+  } -ArgumentList $switch, $cmdArgs
+  Set-Busy $cmdArgs[0]
 }
 
 function Show-StatusOutput($lines) {
-  $exitIp = $null; $srv = $null; $co = ''
+  $exitIp = $null; $srv = $null; $co = ''; $on = $false
   foreach ($l in $lines) {
-    if ($l -match '^vpn exit: (.+)$') { $exitIp = $Matches[1] }
+    if ($l -match '^vpn exit: (.+)$') { $exitIp = $Matches[1]; $on = $true }
+    elseif ($l -match '^direct exit: (.+) \(vpn OFF\)$') { $exitIp = $Matches[1]; $on = $false }
+    elseif ($l -match '^stale state: ') { Write-Log $l }
     elseif ($l -match '^server: (.+)$') { $srv = $Matches[1] }
     elseif ($l -match '^lan: ') { $co = $l }
     elseif ($l -match 'EXIT:(\d+)') { if ($Matches[1] -ne '0') { Write-Log "switch exited $($Matches[1])" } }
   }
-  if ($exitIp) {
+  if ($on -and $exitIp) {
     $status.Text = "VPN: ON  exit $exitIp" + $(if ($srv) { "  [$srv]" }) + "`r`n$co"
     $status.ForeColor = [System.Drawing.Color]::ForestGreen
+  } elseif ($exitIp) {
+    $status.Text = "VPN: OFF  direct $exitIp`r`n$co"
+    $status.ForeColor = [System.Drawing.Color]::Gray
   } else {
-    $status.Text = "VPN: OFF (direct)`r`n$co"
+    $status.Text = "VPN: OFF (status unknown)`r`n$co"
     $status.ForeColor = [System.Drawing.Color]::Gray
   }
 }
@@ -164,10 +173,13 @@ $btnConnect.Add_Click({
   try {
     if ($list.SelectedItem -eq $null) { Write-Log 'pick a server first'; return }
     $sel = $list.SelectedItem.ToString() -replace '\s.*$', ''
-    Write-Log "connecting to $sel (up to ~50s, watchdog armed)..."
+    $cmd = @($sel)
+    $cand = if ($staticMap.ContainsKey($sel)) { Join-Path $wg $staticMap[$sel] } else { $null }
+    if ($cand -and (Test-Path $cand)) { $cmd = @('static', $cand); Write-Log "api-independent static config: $($staticMap[$sel])" }
+    Write-Log "connecting to $sel (up to ~60s, watchdog armed)..."
     $status.Text = "connecting to $sel..."
     $status.ForeColor = [System.Drawing.Color]::DarkOrange
-    Start-GuiJob $sel
+    Start-GuiJob $cmd
   } catch { Write-Log ("connect error: " + $_.Exception.Message) }
 })
 
