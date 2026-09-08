@@ -46,10 +46,30 @@ replicated surface - most likely:
 - `run-signals-builder.cjs` - node shim builder; generates `run_payload.mjs`
   next to the fetched m.js/s.js and runs them headless (R / S.collect).
 
+## what other tools do (checked 2026-09-08)
+
+- **pyLoad** (`src/pyload/plugins/decrypters/FilecryptCc.py` v0.52, GPLv3):
+  handles internal/circle/solvemedia/keycaptcha/coinhive/recaptcha captchas.
+  **NO handler for the pow captcha** - their `handle_captcha` would hit
+  "Unknown captcha found, retrying" on the current gate. plugin predates it.
+- **JDownloader 2** (public SVN mirror, plugin rev 52828): line ~652 in
+  `FileCryptCc.java` explicitly detects `/js/pow_captcha.js` + `name="pow_`
+  and throws `UNSUPPORTED_CAPTCHA - "Unsupported captcha type 'powcaptcha.com'"`.
+  closed-source app though - shipped binary may have a newer solver than the
+  public mirror (unverified).
+- **useful either way - the after-unlock extraction (from pyLoad)**:
+  - CNL route: unlocked page has `onsubmit="CNLPOP('...', '<crypted>', ...,'<jk>')"`
+    blocks; links = AES-128-CBC decrypt(base64decode(crypted), key=iv=bytes.fromhex(jk)),
+    strip \x00/\r, split \n. no clicks needed, no ad-gate /Link/ pages.
+  - DLC route: `DownloadDLC('<id>')` -> GET /DLC/<id>.dlc (Download Link Container).
+  - weblink route: /Link/<id>.html -> find `index.php?Action=Go&id=<id>` -> GET it,
+    final host URL is the Location header.
+
 ## honest paths that DO work
 
 1. browser (agent-browser or manual) on the filecrypt page -> pass the box ->
-   copy the dlhoster links
-2. JDownloader2 - handles filecrypt containers natively including this captcha
+   copy the dlhoster links (or save the unlocked HTML - CNL blocks decrypt offline)
+2. JDownloader2 - handles filecrypt containers natively (closed binary, may
+   have a private solver)
 3. if the release is also on another trusted-chain host (e.g. direct DDL site),
    prefer that
