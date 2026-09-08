@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.2
+// @version      4.3
 // @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
@@ -200,23 +200,88 @@
   }
   _onFileCaptured = onFileCaptured;
 
+  function sanitizeFilename(s) { return String(s).replace(/[^a-z0-9_\-]+/gi, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "world"; }
+
+  function addJsonAndThumbForWorld(world, displayHint) {
+    // world is the raw world object (from API)
+    const worldId = world?.id || world?.world_id || world?.generation_output?.world_id || world?.generation_output?.id || null;
+    const displayName = world?.generation_output?.display_name || world?.display_name || world?.name || displayHint || "world";
+    const baseName = worldId ? `${worldId}` : sanitizeFilename(displayName);
+    // 1) json — store synthetic entry that download handler will synthesize
+    const jsonUrl = `json://${baseName}`;
+    if (!capturedUrls.has(jsonUrl)) {
+      // collect minimal useful JSON: the whole world + spz hint
+      const payload = JSON.stringify(world, null, 2);
+      capturedUrls.set(jsonUrl, { name: `${sanitizeFilename(displayName) || baseName}.json`, resolution: "json", isJson: true, jsonData: payload, worldId });
+      log("  + json ->", `${sanitizeFilename(displayName)}.json`);
+    }
+    // 2) webp thumbnail — try mpi, cond_image, og:image fallback
+    let thumbUrl = world?.generation_output?.thumbnail_url || world?.thumbnail_url
+      || world?.generation_output?.cond_image_url || world?.cond_image_url || null;
+    // mpi base -> thumbnail_1440.webp (as in mjs)
+    if (!thumbUrl) {
+      const mpi = world?.generation_output?.mpi_url || world?.mpi_url;
+      if (mpi) thumbUrl = `${mpi.replace(/\/$/, "")}/thumbnail_1440.webp`;
+    }
+    // fallback to og:image meta (public thumbnail)
+    if (!thumbUrl) {
+      const og = document.querySelector('meta[property="og:image"]')?.content || "";
+      if (og.includes("cdn.marble.worldlabs.ai") && og.includes(".webp")) thumbUrl = og.split("?")[0];
+    }
+    if (thumbUrl && thumbUrl.includes("http") && !capturedUrls.has(thumbUrl)) {
+      const tname = thumbUrl.split("/").pop().split("?")[0];
+      // ensure .webp extension
+      const wname = tname.includes(".") ? tname : `${sanitizeFilename(displayName)}_thumb.webp`;
+      capturedUrls.set(thumbUrl, { name: wname, resolution: "webp" });
+      log("  + webp ->", wname);
+    }
+  }
+
   function onApiData(data) {
     try {
-      const found = [];
-      collectSpzUrls(data, found);
-      if (found.length) {
-        log(`Found ${found.length} urls via recursive scan`);
-        for (const { key, url } of found) {
-          if (url && typeof url === "string") {
-            const name = url.split("/").pop().split("?")[0];
-            const meta = { name, resolution: key };
-            if (!capturedUrls.has(url)) {
-              capturedUrls.set(url, meta);
+      // normalize to world list for per-scene 3-file grouping (spz+json+webp)
+      let worlds = [];
+      if (Array.isArray(data)) worlds = data;
+      else if (data?.data && Array.isArray(data.data)) worlds = data.data;
+      else if (data?.worlds && Array.isArray(data.worlds)) worlds = data.worlds;
+      else if (data?.world && typeof data.world === "object") worlds = [data.world];
+      else if (data?.generation_output || data?.spz_urls || data?.id) worlds = [data];
+      else worlds = [data];
+
+      let anySpz = false;
+      for (const w of worlds) {
+        const found = [];
+        collectSpzUrls(w, found);
+        if (found.length) {
+          anySpz = true;
+          log(`Found ${found.length} spz urls for world ${w?.id || w?.world_id || "unknown"}`);
+          for (const { key, url } of found) {
+            if (url && typeof url === "string" && !capturedUrls.has(url)) {
+              const name = url.split("/").pop().split("?")[0];
+              capturedUrls.set(url, { name, resolution: key });
               log("  +", key, "->", name);
             }
           }
+          addJsonAndThumbForWorld(w);
+          const wName = w?.generation_output?.display_name || w?.display_name || w?.name;
+          if (wName) worldDataList.push({ name: wName });
         }
-        // also capture display name if present
+      }
+      if (anySpz) { refreshPanel(); return; }
+
+      // fallback: global recursive scan if per-world didn't hit (e.g. wrapped response)
+      const found = [];
+      collectSpzUrls(data, found);
+      if (found.length) {
+        log(`Found ${found.length} urls via global scan`);
+        for (const { key, url } of found) {
+          if (url && typeof url === "string" && !capturedUrls.has(url)) {
+            capturedUrls.set(url, { name: url.split("/").pop().split("?")[0], resolution: key });
+            log("  +", key, "->", name);
+          }
+        }
+        // still try to add json/thumb from top-level if it looks like a world
+        if (data && typeof data === "object" && (data.id || data.generation_output)) addJsonAndThumbForWorld(data);
         const probe = (o, d=0) => {
           if (!o || d>4) return;
           if (o.display_name || o.name) worldDataList.push({ name: o.display_name || o.name });
@@ -226,24 +291,24 @@
         refreshPanel();
         return;
       }
-      // fallback to old shape
+      // legacy shape fallback
       const items = Array.isArray(data) ? data : [data];
       for (const w of items) {
         const spzUrls = w?.generation_output?.spz_urls || w?.spz_urls || w?.data?.generation_output?.spz_urls;
         if (spzUrls && typeof spzUrls === "object" && Object.keys(spzUrls).length > 0) {
           log("Found spz_urls (legacy):", Object.keys(spzUrls));
           for (const [key, url] of Object.entries(spzUrls)) {
-            if (url && typeof url === "string") {
-              const name = url.split("/").pop().split("?")[0];
-              capturedUrls.set(url, { name, resolution: key });
+            if (url && typeof url === "string" && !capturedUrls.has(url)) {
+              capturedUrls.set(url, { name: url.split("/").pop().split("?")[0], resolution: key });
               log("  +", key, "->", name);
             }
           }
           const plyUrl = w?.generation_output?.ply_url || w?.ply_url || w?.data?.generation_output?.ply_url;
-          if (plyUrl) {
+          if (plyUrl && !capturedUrls.has(plyUrl)) {
             capturedUrls.set(plyUrl, { name: plyUrl.split("/").pop().split("?")[0], resolution: "ply" });
             log("  + PLY fallback:", plyUrl.split("/").pop());
           }
+          addJsonAndThumbForWorld(w);
           const worldName = w?.generation_output?.display_name || w?.display_name || w?.data?.display_name || "unknown";
           worldDataList.push({ name: worldName });
           log("World:", worldName);
@@ -455,7 +520,7 @@
       groups[res].push(item);
     }
 
-    const order = ["full", "3M", "500k", "200k", "150k", "100k", "PLY", "other"];
+    const order = ["full", "full_res", "3M", "500k", "200k", "150k", "100k", "PLY", "json", "webp", "other"];
     const sorted = Object.entries(groups).sort((a, b) => {
       const ai = order.indexOf(a[0]), bi = order.indexOf(b[0]);
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -464,8 +529,8 @@
     for (const [res, items] of sorted) {
       const sec = document.createElement("div");
       sec.className = "wl-dl-sec";
-      const tagCls = ["full", "3M", "full_res"].includes(res) ? "tg-hi" : res === "500k" ? "tg-mid" : res === "PLY" ? "tg-ply" : "tg-lo";
-      const best = (res === "full" || res === "full_res" || res === "3M") ? " [best quality]" : "";
+      const tagCls = ["full", "3M", "full_res"].includes(res) ? "tg-hi" : res === "500k" ? "tg-mid" : res === "PLY" ? "tg-ply" : (res === "json" ? "tg-mid" : (res === "webp" ? "tg-lo" : "tg-lo"));
+      const best = (res === "full" || res === "full_res" || res === "3M") ? " [best quality]" : (res === "json" ? " — scene json" : (res === "webp" ? " — thumbnail" : ""));
       sec.innerHTML = `<div class="wl-dl-sec-t">${res} (${items.length})${best}</div>`;
 
       for (const item of items) {
@@ -482,6 +547,16 @@
         row.querySelector(".bd").addEventListener("click", async (e) => {
           const btn = e.target;
           btn.textContent = "...";
+
+          // json synthetic — no network, just blob from stored string
+          if (item.isJson && item.jsonData) {
+            const blob = new Blob([item.jsonData], { type: "application/json" });
+            await saveBlob(blob, item.name);
+            btn.textContent = "OK";
+            btn.classList.add("ok");
+            uiLog(`Saved json: ${item.name}`);
+            return;
+          }
 
           // Try DB first
           const rec = await dbGet(item.url);
@@ -652,6 +727,35 @@
     // 5. Final perf re-scan after fetches
     scanPerformance();
 
+    // 6. Ensure 3-file bundle per scene: if spz exists but json/webp missing, synthesize
+    const hasJson = [...capturedUrls.values()].some(v => v.resolution === "json");
+    const hasWebp = [...capturedUrls.values()].some(v => v.resolution === "webp");
+    if (capturedUrls.size > 0) {
+      if (!hasJson) {
+        const wid = location.pathname.match(/\/world\/([a-f0-9-]+)/)?.[1] || "world";
+        const title = document.querySelector('meta[property="og:title"]')?.content || document.title || wid;
+        const spzList = [...capturedUrls.entries()].filter(([u,m])=> m.resolution && ["full","full_res","3M","500k","150k","100k","200k"].includes(m.resolution)).map(([u])=>u);
+        if (spzList.length === 0 && capturedUrls.size>0) {
+          // fallback: any spz-like
+          for (const [u,m] of capturedUrls) if (u.includes(".spz") && !m.isJson) spzList.push(u);
+        }
+        const payload = JSON.stringify({ worldId: wid, title, spz_urls: spzList, capturedAt: new Date().toISOString(), source: location.href }, null, 2);
+        const jUrl = `json://${wid}_fallback`;
+        if (!capturedUrls.has(jUrl)) {
+          capturedUrls.set(jUrl, { name: `${sanitizeFilename(title) || wid}.json`, resolution: "json", isJson: true, jsonData: payload });
+          uiLog(`Fallback json: ${sanitizeFilename(title)}.json`);
+        }
+      }
+      if (!hasWebp) {
+        const og = document.querySelector('meta[property="og:image"]')?.content || "";
+        let thumb = og.includes("cdn.marble.worldlabs.ai") ? og.split("?")[0] : "";
+        if (thumb && !capturedUrls.has(thumb)) {
+          capturedUrls.set(thumb, { name: thumb.split("/").pop().split("?")[0], resolution: "webp" });
+          uiLog(`Fallback webp: ${thumb.split("/").pop()}`);
+        }
+      }
+    }
+
     await refreshPanel();
     uiLog("Scan complete. Total captured: " + capturedUrls.size);
   }
@@ -667,29 +771,36 @@
     const total = capturedUrls.size;
 
     for (const [url, meta] of capturedUrls) {
-      // Try DB first
-      const rec = await dbGet(url);
-      if (rec?.bytes) {
-        const blob = new Blob([rec.bytes], { type: "application/octet-stream" });
+      if (meta.isJson && meta.jsonData) {
+        const blob = new Blob([meta.jsonData], { type: "application/json" });
         await saveBlob(blob, meta.name);
         done++;
-        uiLog(`DB saved: ${meta.name}`);
+        uiLog(`Saved json: ${meta.name}`);
       } else {
-        // GM_xmlhttpRequest
-        await new Promise((resolve) => {
-          GM_xmlhttpRequest({
-            method: "GET", url, responseType: "blob",
-            onload: async (resp) => {
-              if (resp.status === 200 && resp.response) {
-                await saveBlob(resp.response, meta.name);
-                uiLog(`GM saved: ${meta.name}`);
-              }
-              done++;
-              resolve();
-            },
-            onerror: () => { done++; resolve(); },
+        // Try DB first
+        const rec = await dbGet(url);
+        if (rec?.bytes) {
+          const blob = new Blob([rec.bytes], { type: "application/octet-stream" });
+          await saveBlob(blob, meta.name);
+          done++;
+          uiLog(`DB saved: ${meta.name}`);
+        } else {
+          // GM_xmlhttpRequest
+          await new Promise((resolve) => {
+            GM_xmlhttpRequest({
+              method: "GET", url, responseType: "blob",
+              onload: async (resp) => {
+                if (resp.status === 200 && resp.response) {
+                  await saveBlob(resp.response, meta.name);
+                  uiLog(`GM saved: ${meta.name}`);
+                }
+                done++;
+                resolve();
+              },
+              onerror: () => { done++; resolve(); },
+            });
           });
-        });
+        }
       }
       bar.style.width = Math.round((done / total) * 100) + "%";
       btn.textContent = `${done}/${total}`;
