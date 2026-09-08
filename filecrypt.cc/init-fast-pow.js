@@ -29,14 +29,17 @@ self.onmessage = function(e){
     const diff=d.difficulty|0;
     const expected=Math.pow(2,diff);
     const t0=Date.now();
-    let nonce=0;
-    // no progress messages — fastest, avoids main-thread postMessage overhead
+    let nonce=0, lastProgress=0;
     while(true){
       if(sha1lz(prefix+nonce)>=diff){
         self.postMessage({type:'done', nonce:nonce, hashes:nonce+1, ms:Date.now()-t0, pauses:0});
         return;
       }
       nonce++;
+      if(nonce - lastProgress >= 500000){
+        lastProgress=nonce;
+        self.postMessage({type:'progress', hashes:nonce, ms:Date.now()-t0, progress:1-Math.exp(-nonce/expected)});
+      }
     }
   }
 };
