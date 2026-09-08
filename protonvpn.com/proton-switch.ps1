@@ -55,6 +55,12 @@ function Get-Ovpn {
 function Stop-Tunnel {
   Get-Process openvpn -ErrorAction SilentlyContinue | Stop-Process -Force
   Start-Sleep -Seconds 2
+  # force-kill skips openvpn's route cleanup: orphan 0/1+128/1 via the dead TAP
+  # gateway blackhole ALL internet (direct included). flush them if none left.
+  if ($null -eq (Get-Process openvpn -ErrorAction SilentlyContinue)) {
+    route delete 0.0.0.0 mask 128.0.0.0 2>$null | Out-Null
+    route delete 128.0.0.0 mask 128.0.0.0 2>$null | Out-Null
+  }
 }
 
 function Test-Coexistence {
@@ -80,17 +86,21 @@ function Connect-Ovpn {
   Remove-Item "$wg\current.log" -ErrorAction SilentlyContinue
   Start-Process -FilePath 'C:\Program Files\OpenVPN\bin\openvpn.exe' -ArgumentList '--config', $ovpnPath, '--auth-user-pass', $auth, '--log', "$wg\current.log", '--verb', '3' -WindowStyle Hidden
 
-  # watchdog: a real tunnel ip must appear AND the exit ip must differ from
-  # pre-connect direct (checking ifconfig.me alone races redirect-gateway and
-  # "verifies" over direct). 60s max or kill, never stay offline silently.
+  # watchdog: a real tunnel ip must appear AND (the halved 0/1+128/1 routes via
+  # the TAP prove redirect-gateway applied, OR the exit ip differs from the
+  # pre-connect direct ip). the ip-diff alone can't validate a reconnect to the
+  # SAME server (same exit ip = looked "direct" and got killed); the route check
+  # covers that. 60s max or kill, never stay offline silently.
   $ok = $false; $ip = $null
   foreach ($i in 1..12) {
     Start-Sleep -Seconds 5
     if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) { break }
     $tunNow = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { ($_.InterfaceAlias -like '*OpenVPN*' -or $_.InterfaceAlias -like '*TAP*') -and $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' }
     if (-not $tunNow) { continue }
+    $halved = Get-NetRoute -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in '0.0.0.0/1', '128.0.0.0/1' -and $_.InterfaceAlias -like '*TAP*' }
+    if (-not $halved) { continue }
     try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 6).Trim() } catch { continue }
-    if ($null -eq $directIp -or $ip -ne $directIp) { $ok = $true; break }
+    $ok = $true; break
   }
   if (-not $ok -or -not (Get-Process openvpn -ErrorAction SilentlyContinue)) {
     Stop-Tunnel
@@ -133,6 +143,7 @@ switch ($args[0]) {
       try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 12).Trim(); "direct exit: $ip (vpn OFF)" } catch { "direct exit: (offline?)" }
       if (Test-Path "$wg\state.txt") { "stale state: $((Get-Content "$wg\state.txt" -Raw).Trim()) (no tunnel!)" }
       if ($tunUp) { "note: openvpn running but no tunnel ip yet (connecting?)" }
+      $tunIp = @()
     }
     $c = Test-Coexistence
     "lan: $($c.Lan)  tailscale-ssh: $($c.Ts)"
@@ -154,6 +165,25 @@ switch ($args[0]) {
     if ($endpoint -notmatch '^\d+\.\d+\.\d+\.\d+$') {
       $endpoint = (Resolve-DnsName $endpoint -Type A -ErrorAction Stop | Select-Object -First 1).IPAddress.ToString()
       "resolved endpoint -> $endpoint"
+    }
+    if ($raw -match '(?m)^proto udp') {
+      # udp handshake (TLS) times out on networks that filter udp: probe tcp
+      # ports first so we fail fast or fall back instead of burning 60s.
+      $tcpPort = $null
+      foreach ($p in 443, 8443, 7770, 80) {
+        $c = New-Object Net.Sockets.TcpClient
+        try {
+          $iar = $c.BeginConnect($endpoint, $p, $null, $null)
+          if ($iar.AsyncWaitHandle.WaitOne(2500)) { $c.EndConnect($iar); $tcpPort = $p; break }
+        } catch { } finally { $c.Close() }
+      }
+      if ($tcpPort) {
+        "udp blocked here - tcp fallback on port $tcpPort"
+        $raw = $raw -replace '(?m)^proto udp.*', 'proto tcp-client'
+        $raw = $raw -replace '(?m)^remote \S+( \d+)?', "remote $endpoint $tcpPort"
+      } else {
+        throw "udp-only config and no tcp ports (443/8443/7770/80) open on $endpoint - udp is blocked on this network. try nl."
+      }
     }
     Connect-Ovpn $endpoint $raw "static:$(Split-Path $src -Leaf)"
   }

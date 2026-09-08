@@ -19,6 +19,8 @@ $wg = 'C:\tmp\sbx\wg'
 
 # saved .ovpn fallbacks per country (used when the proton api/session is dead;
 # files hold private key material - they stay in C:\tmp\sbx\wg, never in the repo)
+# NOTE: nl/jp/ro ovpns are proto udp; on this network udp is blocked, the switcher
+# probes tcp 443/8443/7770/80 and rewrites the config itself - no action needed.
 $staticMap = @{ nl = 'nl-tcp-nodco.ovpn'; jp = 'jp-free.ovpn'; ro = 'ro-free.ovpn' }
 
 $form = New-Object System.Windows.Forms.Form
