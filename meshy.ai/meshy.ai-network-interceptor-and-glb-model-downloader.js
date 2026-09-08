@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Meshy GLB Downloader
 // @namespace    https://github.com/meshy-dl
-// @version      2.0
-// @description  Download GLB models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save
+// @version      2.1
+// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save
 // @author       fahad
 // @match        *://*.meshy.ai/*
 // @grant        GM_download
@@ -41,33 +41,55 @@
     if (e.data.type === "INJECT_READY" && _uiLog) _uiLog("Interceptor ready (page)");
     if (e.data.type === "FILE") {
       const url = e.data.url;
-      const name = url.split("/").pop().split("?")[0];
+      let name = url.split("/").pop().split("?")[0];
+      // ?download=glb urls have no extension — name them properly
+      if (url.includes("?download=")) {
+        const fmt = (url.match(/[?&]download=([^&]+)/) || [])[1] || "glb";
+        const slug = location.pathname.split("/").pop().split("?")[0].split("-")[0] || "model";
+        name = `${sanitizeFilename(slug) || "model"}.${fmt}`;
+      } else if (!name.includes(".")) name = name + ".bin";
       if (_onFileCaptured) _onFileCaptured(url, name, 0);
       else { if (!capturedUrls.has(url)) capturedUrls.set(url, { name }); if (_refreshPanel) _refreshPanel(); }
       if (_uiLog) _uiLog(`File: ${name.slice(0, 44)}`);
-      log("page file:", name);
+      log("page file:", name, url);
     }
     if (e.data.type === "API") {
       if (_onApiData) _onApiData(e.data.data, e.data.url);
-      else log("early API", e.data.url);
-      if (_uiLog) _uiLog(`API: ${String(e.data.url).split("/").pop().slice(0,40)}`);
+      else log("early API", e.data.url, e.data.data);
+      if (_uiLog) _uiLog(`API: ${String(e.data.url).split("/").pop().slice(0,50)} — ${Array.isArray(e.data.data) ? e.data.data.length + " items" : typeof e.data.data}`);
     }
     if (e.data.type === "API_TEXT") {
       const text = e.data.text || "";
-      const re = /https?:\/\/[^"'\s<>]+\.glb(\?[^"'\s<>]*)?/g;
+      // catch glb, meshy, download=, cdn-models, assets.meshy
+      const re = /https?:\/\/[^"'\s<>]+(?:\.glb|\.meshy|\?download=[a-z0-9]+|\/cdn-models\/[^"'\s<>]+|\/cdn-images\/[^"'\s<>]+\.(png|jpg|webp))(\?[^"'\s<>]*)?/gi;
       let m, cnt = 0;
       for (m of text.matchAll(re)) {
-        const clean = m[0].replace(/\\u0026/g, "&");
-        if (!capturedUrls.has(clean)) { capturedUrls.set(clean, { name: clean.split("/").pop().split("?")[0], fromText: true }); cnt++; }
+        const clean = m[0].replace(/\\u0026/g, "&").replace(/\\u002F/g, "/");
+        let name = clean.split("/").pop().split("?")[0];
+        if (clean.includes("?download=")) {
+          const fmt = (clean.match(/[?&]download=([^&]+)/) || [])[1] || "glb";
+          name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+        }
+        if (!capturedUrls.has(clean)) {
+          const tag = clean.includes("cdn-images") ? "preview" : (clean.includes(".meshy") ? "meshy" : "glb");
+          capturedUrls.set(clean, { name, resolution: tag, fromText: true });
+          cnt++;
+        }
       }
-      if (cnt) { if (_refreshPanel) _refreshPanel(); if (_uiLog) _uiLog(`Text scan: ${cnt} glb`); }
+      if (cnt) { if (_refreshPanel) _refreshPanel(); if (_uiLog) _uiLog(`Text scan: ${cnt} assets`); }
     }
   });
 
+  // sanitize early for the message handler
+  function sanitizeFilename(s) { return String(s).replace(/[^a-z0-9_\-]+/gi, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "model"; }
+
   function injectInterceptor() {
+    // catch: .glb .meshy ?download= cdn-models assets.meshy modelUrl — unconditional JSON sniff
     const code = `(function(){
       const TAG='[MESHY-DL:INJECT]';
       const lg=(...a)=>console.log(TAG,...a);
+      const isModelUrl = (u) => u && (u.includes('.glb')||u.includes('.meshy')||u.includes('download=')||u.includes('cdn-models')||u.includes('assets.meshy')||u.includes('cdn-images'));
+      const isJsonHint = (t) => t && (t.includes('modelUrl')||t.includes('model_url')||t.includes('.glb')||t.includes('.meshy')||t.includes('download')||t.includes('cdn-models')||t.includes('previewImage'));
       lg('inject start', location.hostname+location.pathname);
       try{
         const _fetch=window.fetch.bind(window);
@@ -75,19 +97,28 @@
           const url = typeof input==='string' ? input : (input && input.url) || '';
           const res = await _fetch(input, init);
           try{
-            if(url.includes('.glb')||url.includes('.gltf')||url.includes('.usdz')){
+            if(isModelUrl(url)){
               window.postMessage({source:'MESHY_DL_NET', type:'FILE', url}, '*');
             }
-            if((url.includes('/api/')||url.includes('/web/v2/tasks')||url.includes('/tasks/'))&&res.ok){
+            if(res.ok){
               const ct=res.headers.get('content-type')||'';
               const clone=res.clone();
-              if(ct.includes('json')){
+              if(ct.includes('json') || url.includes('/public/v2/') || url.includes('/api/') || url.includes('/tasks/')){
                 clone.json().then(d=>{
-                  window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url}, '*');
-                }).catch(()=>{});
+                  const s=JSON.stringify(d);
+                  if(isJsonHint(s) || isModelUrl(url)) window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url}, '*');
+                  else if(url.includes('/public/v2/')) window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url}, '*');
+                }).catch(()=>{
+                  clone.text().then(t=>{
+                    if(isJsonHint(t)||isModelUrl(t)){
+                      try{ const d=JSON.parse(t); window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url}, '*'); }
+                      catch{ window.postMessage({source:'MESHY_DL_NET', type:'API_TEXT', text:t, url}, '*'); }
+                    }
+                  }).catch(()=>{});
+                });
               } else {
                 clone.text().then(t=>{
-                  if(t.includes('.glb')||t.includes('modelUrl')||t.includes('model_url')){
+                  if(isJsonHint(t)||isModelUrl(t)){
                     try{ const d=JSON.parse(t); window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url}, '*'); }
                     catch{ window.postMessage({source:'MESHY_DL_NET', type:'API_TEXT', text:t, url}, '*'); }
                   }
@@ -107,15 +138,18 @@
           this.addEventListener('load', function(){
             const u=this._meshyUrl||'';
             try{
-              if(u.includes('.glb')||u.includes('.gltf')){
+              if(isModelUrl(u)){
                 window.postMessage({source:'MESHY_DL_NET', type:'FILE', url:u}, '*');
               }
-              if((u.includes('/api/')||u.includes('/tasks'))&&this.status>=200&&this.status<300){
+              if(this.status>=200&&this.status<300){
                 const ct=(this.getResponseHeader('content-type')||'');
-                if(ct.includes('json')||this.responseText.trim().startsWith('{')){
-                  try{ const d=JSON.parse(this.responseText); window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url:u}, '*'); }catch{}
-                } else if(this.responseText.includes('.glb')){
-                  window.postMessage({source:'MESHY_DL_NET', type:'API_TEXT', text:this.responseText, url:u}, '*');
+                const txt=this.responseText||'';
+                if(ct.includes('json')||txt.trim().startsWith('{')||txt.trim().startsWith('[')){
+                  try{ const d=JSON.parse(txt); const s=JSON.stringify(d); if(isJsonHint(s)||isModelUrl(u)) window.postMessage({source:'MESHY_DL_NET', type:'API', data:d, url:u}, '*'); }catch{
+                    if(isJsonHint(txt)||isModelUrl(txt)) window.postMessage({source:'MESHY_DL_NET', type:'API_TEXT', text:txt, url:u}, '*');
+                  }
+                } else if(isJsonHint(txt)||isModelUrl(txt)){
+                  window.postMessage({source:'MESHY_DL_NET', type:'API_TEXT', text:txt, url:u}, '*');
                 }
               }
             }catch{}
@@ -147,9 +181,18 @@
   function findModelUrls(obj, out = []) {
     if (!obj) return out;
     if (typeof obj === "string") {
-      const re = /https?:\/\/[^ \n\r"']+\.glb(\?[^ \n\r"']*)?/g;
+      // glb, meshy, ?download=, cdn-models/assets
+      const re = /https?:\/\/[^ \n\r"']+(?:\.glb|\.meshy|\?download=[a-z0-9_\-]+|cdn-models\/[^ \n\r"']+|assets\.meshy\.ai\/[^ \n\r"']+)(?:\?[^ \n\r"']*)?/gi;
       let m;
-      for (m of obj.matchAll(re)) out.push(m[0].replace(/\\u0026/g, "&"));
+      for (m of obj.matchAll(re)) {
+        let u = m[0].replace(/\\u0026/g, "&").replace(/\\u002F/g, "/");
+        // trim trailing punctuation from JSON escaping
+        u = u.replace(/[",\\]+$/, "");
+        out.push(u);
+      }
+      // also catch contentUrl download links embedded as strings
+      const dlRe = /https?:\/\/[^"'\s<>]+\?download=[a-z0-9_\-]+/gi;
+      for (m of obj.matchAll(dlRe)) out.push(m[0].replace(/\\u0026/g, "&"));
       return out;
     }
     if (Array.isArray(obj)) { obj.forEach(i => findModelUrls(i, out)); return out; }
@@ -158,9 +201,13 @@
         if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
         const v = obj[k];
         const lk = k.toLowerCase();
-        if ((lk.includes("modelurl") || lk === "glb_url" || lk === "url") && typeof v === "string" && v.includes(".glb")) {
-          out.push(v.replace(/\\u0026/g, "&"));
-        } else if (typeof v === "string" && v.includes(".glb") && v.startsWith("http")) {
+        const isModelKey = lk.includes("modelurl") || lk === "glb_url" || lk === "contenturl" || lk === "model_url" || lk === "quadjsonurl" || lk === "base_model_url";
+        if (isModelKey && typeof v === "string" && v.startsWith("http")) {
+          out.push(v.replace(/\\u0026/g, "&").replace(/\\u002F/g, "/"));
+        } else if (typeof v === "string" && v.startsWith("http") && (v.includes(".glb") || v.includes(".meshy") || v.includes("?download=") || v.includes("cdn-models") || v.includes("assets.meshy"))) {
+          out.push(v.replace(/\\u0026/g, "&").replace(/\\u002F/g, "/"));
+        } else if (typeof v === "string" && v.includes("http") && v.includes("cdn-images") && v.includes("preview")) {
+          // preview images alongside models — also useful
           out.push(v.replace(/\\u0026/g, "&"));
         } else {
           findModelUrls(v, out);
@@ -170,35 +217,71 @@
     return out;
   }
 
-  function sanitizeFilename(s) { return String(s).replace(/[^a-z0-9_\-]+/gi, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "model"; }
+  // sanitize already defined above for early handler — keep alias if needed
+  // function sanitizeFilename(s) { ... } — defined at top
 
   function extTag(url, meta) {
     if (meta && meta.resolution) return meta.resolution;
+    if (url.includes("?download=")) {
+      const fmt = (url.match(/[?&]download=([^&]+)/) || [])[1] || "";
+      if (fmt) return fmt.toLowerCase(); // glb, fbx, obj, stl, usdz
+    }
     const base = (url.split("/").pop() || "").split("?")[0].toLowerCase();
     if (base.endsWith(".glb")) return "glb";
+    if (base.endsWith(".meshy")) return "meshy";
     if (base.endsWith(".gltf")) return "gltf";
     if (base.endsWith(".usdz")) return "usdz";
-    if (base.endsWith(".png") || base.endsWith(".jpg") || base.endsWith(".webp")) return "preview";
+    if (base.endsWith(".fbx")) return "fbx";
+    if (base.endsWith(".obj")) return "obj";
+    if (base.endsWith(".stl")) return "stl";
+    if (base.endsWith(".png") || base.endsWith(".jpg") || base.endsWith(".jpeg") || base.endsWith(".webp")) return "preview";
     if (base.endsWith(".json")) return "json";
+    if (url.includes("cdn-models") || url.includes("assets.meshy")) return "meshy";
     return "other";
   }
 
-  // capture preview + json alongside glb
+  // capture preview + json alongside glb (handles both camelCase and snake_case + showcase shape)
   function addAuxForTask(task) {
     const meta = task || {};
-    const title = meta.prompt || meta.name || meta.display_name || meta.title || "";
-    // preview images
-    const preview = meta.thumbnail_url || meta.preview_url || meta.image_url || meta.rendered_image || null;
-    if (preview && typeof preview === "string" && preview.startsWith("http") && !capturedUrls.has(preview)) {
-      const name = preview.split("/").pop().split("?")[0] || `${sanitizeFilename(title) || "preview"}.jpg`;
-      capturedUrls.set(preview, { name, resolution: "preview" });
-      log(" + preview ->", name);
+    const title = meta.prompt || meta.name || meta.display_name || meta.title || meta.objectPrompt || meta.slug || "";
+    const candidates = [
+      meta.thumbnailUrl, meta.thumbnail_url, meta.previewImage, meta.preview_image, meta.previewImageUrl,
+      meta.preview_url, meta.image_url, meta.rendered_image, meta.thumbnailNoBgUrl, meta.solidThumbnailUrl,
+      meta.coverPortrait, meta.ssrPosterUrl, meta.previewLogoImage
+    ];
+    for (const preview of candidates) {
+      if (preview && typeof preview === "string" && preview.startsWith("http") && !capturedUrls.has(preview)) {
+        let name = preview.split("/").pop().split("?")[0];
+        if (!name || !name.includes(".")) name = `${sanitizeFilename(title) || "preview"}_preview.png`;
+        capturedUrls.set(preview, { name, resolution: "preview" });
+        log(" + preview ->", name);
+      }
     }
-    // also try pbr / texture urls if present
-    for (const k of ["pbr_url", "texture_url", "albedo_url"]) {
+    // texture maps
+    const texKeys = ["pbr_url", "texture_url", "albedo_url", "colorMapUrl", "metallicMapUrl", "roughnessMapUrl", "normalMapUrl"];
+    for (const k of texKeys) {
       if (typeof meta[k] === "string" && meta[k].startsWith("http") && !capturedUrls.has(meta[k])) {
         capturedUrls.set(meta[k], { name: meta[k].split("/").pop().split("?")[0], resolution: "texture" });
       }
+    }
+    // showcase textureUrls array
+    if (Array.isArray(meta.textureUrls)) {
+      for (const tu of meta.textureUrls) {
+        for (const v of Object.values(tu)) if (typeof v === "string" && v.startsWith("http") && !capturedUrls.has(v)) {
+          capturedUrls.set(v, { name: v.split("/").pop().split("?")[0], resolution: "texture" });
+        }
+      }
+    }
+    // model.json / quad json
+    for (const k of ["quadJsonUrl", "quad_json_url", "modelJsonUrl", "quadJson"]) {
+      if (typeof meta[k] === "string" && meta[k].startsWith("http") && !capturedUrls.has(meta[k])) {
+        capturedUrls.set(meta[k], { name: meta[k].split("/").pop().split("?")[0] || "model.json", resolution: "json" });
+      }
+    }
+    // base modelUrl if .meshy/.glb
+    if (typeof meta.modelUrl === "string" && meta.modelUrl.startsWith("http") && !capturedUrls.has(meta.modelUrl)) {
+      let name = meta.modelUrl.split("/").pop().split("?")[0] || `${sanitizeFilename(title) || "model"}.meshy`;
+      capturedUrls.set(meta.modelUrl, { name, resolution: extTag(meta.modelUrl, null) });
     }
   }
 
@@ -213,26 +296,64 @@
 
   function onApiData(data, srcUrl) {
     try {
-      const urls = findModelUrls(data);
+      const rawUrls = findModelUrls(data);
+      // de-dupe raw
+      const urls = Array.from(new Set(rawUrls));
       let added = 0;
       for (const u of urls) {
         if (!capturedUrls.has(u)) {
-          const name = u.split("/").pop().split("?")[0];
-          capturedUrls.set(u, { name, resolution: "glb" });
+          let name = u.split("/").pop().split("?")[0];
+          if (!name || name.includes("3d-models")) {
+            // fallback for ?download= links: use slug + format
+            const fmt = (u.match(/[?&]download=([^&]+)/) || [])[1] || extTag(u, null) || "glb";
+            const slug = (() => {
+              try { const p = new URL(u).pathname.split("/").pop() || location.pathname.split("/").pop() || "model"; return p.split("?")[0].split("-")[0]; } catch { return "model"; }
+            })();
+            name = `${sanitizeFilename(slug) || "model"}.${fmt}`;
+            if (name.startsWith(".")) name = "model." + fmt;
+          }
+          if (u.includes("?download=") && !name.includes(".")) {
+            const fmt = (u.match(/[?&]download=([^&]+)/) || [])[1] || "glb";
+            name = name + "." + fmt;
+          }
+          const tag = extTag(u, null);
+          capturedUrls.set(u, { name, resolution: tag });
           added++;
-          log(" + glb", name, "via", String(srcUrl).split("/").pop());
+          log(" +", tag, name, "via", String(srcUrl).split("/").slice(-2).join("/"));
         }
       }
       // also catch auxiliary assets per-task
       const tasks = Array.isArray(data) ? data : (data?.data && Array.isArray(data.data) ? data.data : (data?.result ? [data.result] : [data]));
       for (const t of tasks) {
-        if (t && typeof t === "object") addAuxForTask(t);
-        // nested
-        if (t?.task && typeof t.task === "object") addAuxForTask(t.task);
-        if (t?.model && typeof t.model === "object") addAuxForTask(t.model);
+        if (t && typeof t === "object") {
+          addAuxForTask(t);
+          // nested common shapes
+          if (t?.task && typeof t.task === "object") addAuxForTask(t.task);
+          if (t?.model && typeof t.model === "object") addAuxForTask(t.model);
+          if (t?.showcase && typeof t.showcase === "object") addAuxForTask(t.showcase);
+          // legacy showcase-data shape: keys with showcase-data
+          for (const v of Object.values(t)) if (v && typeof v === "object" && (v.modelUrl || v.previewImage || v.textureUrls)) addAuxForTask(v);
+        }
       }
+      // also add explicit download links for showcase pages (they may not be in JSON stringify path)
+      try {
+        const s = JSON.stringify(data);
+        const dlRe = /https?:\/\/[^"']+\?download=(glb|fbx|obj|stl|usdz|gltf)/gi;
+        let m;
+        for (m of s.matchAll(dlRe)) {
+          const u = m[0].replace(/\\u0026/g, "&");
+          if (!capturedUrls.has(u)) {
+            const fmt = m[1].toLowerCase();
+            const slug = location.pathname.split("/").pop().split("?")[0].split("-").slice(0,2).join("-") || "model";
+            const name = `${sanitizeFilename(slug) || "model"}.${fmt}`;
+            capturedUrls.set(u, { name, resolution: fmt });
+            added++;
+          }
+        }
+      } catch {}
       if (added || urls.length) refreshPanel();
-    } catch (e) { log("onApiData error:", e.message); }
+      if (added) uiLog(`API captured ${added} new (${urls.length} total) from ${String(srcUrl).split("/").pop().slice(0,30)}`);
+    } catch (e) { log("onApiData error:", e.message); uiLog("API parse err: " + e.message); }
   }
   _onApiData = onApiData;
 
@@ -453,7 +574,7 @@
       if (!groups[res]) groups[res] = [];
       groups[res].push(item);
     }
-    const order = ["glb", "gltf", "usdz", "preview", "texture", "json", "other"];
+    const order = ["glb", "meshy", "fbx", "obj", "stl", "gltf", "usdz", "preview", "texture", "json", "other"];
     const sorted = Object.entries(groups).sort((a, b) => {
       const ai = order.indexOf(a[0]), bi = order.indexOf(b[0]);
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -462,8 +583,9 @@
     for (const [res, items] of sorted) {
       const sec = document.createElement("div");
       sec.className = "meshy-sec";
-      const tagCls = res === "glb" ? "tg-glb" : res === "preview" ? "tg-preview" : res === "texture" ? "tg-texture" : "tg-other";
-      const label = res === "glb" ? "glb — 3d model" : res === "preview" ? "preview — thumbnail" : res;
+      const tagCls = (res === "glb" || res === "meshy" || ["fbx","obj","stl","gltf","usdz"].includes(res)) ? "tg-glb" : res === "preview" ? "tg-preview" : res === "texture" ? "tg-texture" : "tg-other";
+      const labelMap = { glb:"glb — 3d model", meshy:"meshy — native", fbx:"fbx", obj:"obj", stl:"stl", gltf:"gltf", usdz:"usdz", preview:"preview — thumbnail", texture:"texture — pbr", json:"json" };
+      const label = labelMap[res] || res;
       sec.innerHTML = `<div class="meshy-sec-t">${label} <span class="cnt">${items.length}</span></div>`;
 
       for (const item of items) {
@@ -523,12 +645,16 @@
       const entries = performance.getEntriesByType("resource") || [];
       let cnt = 0;
       for (const r of entries) {
-        if (r.name.includes(".glb") && !capturedUrls.has(r.name)) {
-          capturedUrls.set(r.name, { name: r.name.split("/").pop().split("?")[0], resolution: "glb", fromPerf: true });
+        const isModel = r.name.includes(".glb") || r.name.includes(".meshy") || r.name.includes("?download=") || r.name.includes("cdn-models") || r.name.includes("assets.meshy");
+        if (isModel && !capturedUrls.has(r.name)) {
+          const tag = extTag(r.name, null);
+          let name = r.name.split("/").pop().split("?")[0];
+          if (!name || name.includes("-")) name = r.name.split("/").pop().split("?")[0] || "model." + tag;
+          capturedUrls.set(r.name, { name, resolution: tag, fromPerf: true });
           cnt++;
         }
       }
-      if (cnt) uiLog(`Perf scan: ${cnt} glb`);
+      if (cnt) uiLog(`Perf scan: ${cnt} assets`);
       return cnt;
     } catch { return 0; }
   }
@@ -536,21 +662,69 @@
   function scanEmbeddedJson() {
     try {
       const html = document.documentElement.outerHTML;
-      const re = /https?:\/\/[^"'\s<>]+\.glb(\?[^"'\s<>]*)?/g;
+      // comprehensive regex: glb, meshy, download=, cdn-models
+      const re = /https?:\/\/[^"'\s<>]+(?:\.glb|\.meshy|\?download=[a-z0-9_\-]+|cdn-models\/[^"'\s<>]+|assets\.meshy\.ai\/[^"'\s<>]+)(?:\?[^"'\s<>]*)?/gi;
       let m, cnt = 0;
       for (m of html.matchAll(re)) {
-        const clean = m[0].replace(/\\u0026/g, "&");
-        if (!capturedUrls.has(clean)) { capturedUrls.set(clean, { name: clean.split("/").pop().split("?")[0], resolution: "glb", fromHtml: true }); cnt++; }
+        const clean = m[0].replace(/\\u0026/g, "&").replace(/\\u002F/g, "/");
+        let name = clean.split("/").pop().split("?")[0];
+        if (clean.includes("?download=")) {
+          const fmt = (clean.match(/[?&]download=([^&]+)/) || [])[1] || "glb";
+          name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+        }
+        if (!capturedUrls.has(clean)) { capturedUrls.set(clean, { name, resolution: extTag(clean, null), fromHtml: true }); cnt++; }
+      }
+      // ld+json explicit encodings
+      for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+        try {
+          const j = JSON.parse(s.textContent);
+          const hits = findModelUrls(j);
+          for (const u of hits) if (!capturedUrls.has(u)) {
+            const tag = extTag(u, null);
+            let name = u.split("/").pop().split("?")[0];
+            if (u.includes("?download=")) {
+              const fmt = (u.match(/[?&]download=([^&]+)/) || [])[1] || tag;
+              name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+            }
+            capturedUrls.set(u, { name, resolution: tag, fromLd: true }); cnt++;
+          }
+          // direct encoding array
+          if (j.encoding && Array.isArray(j.encoding)) {
+            for (const enc of j.encoding) if (enc.contentUrl && !capturedUrls.has(enc.contentUrl)) {
+              const fmt = (enc.encodingFormat || enc.name || "glb").toLowerCase().replace(/.*\//, "");
+              const mapped = enc.contentUrl;
+              // ensure fmt matches url param
+              let name = mapped.split("/").pop().split("?")[0];
+              if (mapped.includes("?download=")) {
+                const f = (mapped.match(/[?&]download=([^&]+)/) || [])[1] || fmt;
+                name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${f}`;
+              }
+              capturedUrls.set(mapped, { name, resolution: extTag(mapped, null) }); cnt++;
+            }
+          }
+        } catch {}
       }
       for (const s of document.querySelectorAll("script")) {
         const t = s.textContent || "";
-        if (!t.includes(".glb") && !t.includes("modelUrl")) continue;
+        if (!t.includes(".glb") && !t.includes(".meshy") && !t.includes("modelUrl") && !t.includes("download") && !t.includes("cdn-models")) continue;
         for (m of t.matchAll(re)) {
-          const clean = m[0].replace(/\\u0026/g, "&");
-          if (!capturedUrls.has(clean)) { capturedUrls.set(clean, { name: clean.split("/").pop().split("?")[0], resolution: "glb", fromScript: true }); cnt++; }
+          const clean = m[0].replace(/\\u0026/g, "&").replace(/\\u002F/g, "/");
+          let name = clean.split("/").pop().split("?")[0];
+          if (clean.includes("?download=")) {
+            const fmt = (clean.match(/[?&]download=([^&]+)/) || [])[1] || "glb";
+            name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+          }
+          if (!capturedUrls.has(clean)) { capturedUrls.set(clean, { name, resolution: extTag(clean, null), fromScript: true }); cnt++; }
         }
         const urls = findModelUrls(t);
-        for (const u of urls) if (!capturedUrls.has(u)) { capturedUrls.set(u, { name: u.split("/").pop().split("?")[0], resolution: "glb" }); cnt++; }
+        for (const u of urls) if (!capturedUrls.has(u)) {
+          let name = u.split("/").pop().split("?")[0];
+          if (u.includes("?download=")) {
+            const fmt = (u.match(/[?&]download=([^&]+)/) || [])[1] || extTag(u, null);
+            name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+          }
+          capturedUrls.set(u, { name, resolution: extTag(u, null) }); cnt++;
+        }
       }
       if (cnt) uiLog(`Embed scan: ${cnt} assets`);
       return cnt;
@@ -569,34 +743,100 @@
       if (!url) continue;
       try {
         const u = new URL(url, location.href).href;
-        if (u.includes(".glb") && !capturedUrls.has(u)) {
-          capturedUrls.set(u, { name: u.split("/").pop().split("?")[0], resolution: "glb" });
+        const isModel = u.includes(".glb") || u.includes(".meshy") || u.includes("?download=") || u.includes("cdn-models") || u.includes("assets.meshy");
+        if (isModel && !capturedUrls.has(u)) {
+          const tag = extTag(u, null);
+          let name = u.split("/").pop().split("?")[0];
+          if (u.includes("?download=")) {
+            const fmt = (u.match(/[?&]download=([^&]+)/) || [])[1] || tag;
+            name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+          }
+          capturedUrls.set(u, { name, resolution: tag });
           domCount++;
         }
       } catch {}
     }
-    if (domCount) uiLog(`DOM scan: ${domCount} glb`);
+    if (domCount) uiLog(`DOM scan: ${domCount} assets`);
 
-    // scan globals
+    // scan globals (__NEXT_DATA__ holds fallback for showcase pages)
     try {
-      const g = window.__INITIAL_STATE__ || window.__STATE__ || window.appState || window.__APP_STATE__ || window.__NEXT_DATA__;
-      if (g) {
+      const globals = [window.__INITIAL_STATE__, window.__STATE__, window.appState, window.__APP_STATE__, window.__NEXT_DATA__];
+      // also try to parse __next_f pushed data from script tags (fallback data is in self.__next_f)
+      // we already scan script contents, but also check next data object
+      for (const g of globals) if (g) {
         const urls = findModelUrls(g);
         let gc = 0;
-        for (const u of urls) if (!capturedUrls.has(u)) { capturedUrls.set(u, { name: u.split("/").pop().split("?")[0], resolution: "glb" }); gc++; }
-        if (gc) uiLog(`Global scan: ${gc} glb`);
+        for (const u of urls) if (!capturedUrls.has(u)) {
+          const tag = extTag(u, null);
+          let name = u.split("/").pop().split("?")[0];
+          if (u.includes("?download=")) {
+            const fmt = (u.match(/[?&]download=([^&]+)/) || [])[1] || tag;
+            name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+          }
+          capturedUrls.set(u, { name, resolution: tag }); gc++;
+        }
+        if (gc) uiLog(`Global scan: ${gc} assets`);
       }
     } catch {}
 
-    // fetch visible task ids from URL and DOM hints
+    // direct download links for showcase: always synthesize from current URL if on 3d-models page
     try {
-      const hints = [...document.documentElement.innerHTML.matchAll(/https?:\/\/[^"'\s<>]+\.glb/g)].map(m=>m[0]);
+      const isShowcase = location.pathname.includes("/3d-models/");
+      if (isShowcase) {
+        const base = location.href.split("?")[0];
+        const fmts = ["glb", "fbx", "obj", "stl", "usdz"];
+        let sc = 0;
+        for (const fmt of fmts) {
+          const dl = `${base}?download=${fmt}`;
+          if (!capturedUrls.has(dl)) {
+            const slug = location.pathname.split("/").pop().split("?")[0].split("-")[0] || "model";
+            const name = `${sanitizeFilename(slug) || "model"}.${fmt}`;
+            // we add as hint — will be validated on click via GM fetch (server returns file or 404 if not owned)
+            capturedUrls.set(dl, { name, resolution: fmt, isDownloadHint: true });
+            sc++;
+          }
+        }
+        if (sc) uiLog(`Showcase direct links: ${sc} (glb/fbx/obj/stl/usdz)`);
+      }
+    } catch {}
+
+    // fetch visible task ids from URL and DOM hints — broadened
+    try {
+      const hints = [...document.documentElement.innerHTML.matchAll(/https?:\/\/[^"'\s<>]+(?:\.glb|\.meshy|\?download=[a-z0-9]+)/gi)].map(m=>m[0]);
       let hc = 0;
       for (const h of hints) {
-        const clean = h.replace(/\\u0026/g, "&");
-        if (!capturedUrls.has(clean)) { capturedUrls.set(clean, { name: clean.split("/").pop().split("?")[0], resolution: "glb", fromHtml: true }); hc++; }
+        const clean = h.replace(/\\u0026/g, "&").replace(/\\u002F/g, "/");
+        if (!capturedUrls.has(clean)) {
+          const tag = extTag(clean, null);
+          let name = clean.split("/").pop().split("?")[0];
+          if (clean.includes("?download=")) {
+            const fmt = (clean.match(/[?&]download=([^&]+)/) || [])[1] || tag;
+            name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+          }
+          capturedUrls.set(clean, { name, resolution: tag, fromHtml: true }); hc++;
+        }
       }
-      if (hc) uiLog(`HTML CDN scan: ${hc} glb`);
+      if (hc) uiLog(`HTML CDN scan: ${hc} assets`);
+    } catch {}
+
+    // also pull from JSON-LD encodings if present
+    try {
+      for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+        const j = JSON.parse(s.textContent);
+        if (j.encoding) {
+          let jc = 0;
+          for (const enc of j.encoding) if (enc.contentUrl && !capturedUrls.has(enc.contentUrl)) {
+            const tag = extTag(enc.contentUrl, null);
+            let name = enc.contentUrl.split("/").pop().split("?")[0];
+            if (enc.contentUrl.includes("?download=")) {
+              const fmt = (enc.contentUrl.match(/[?&]download=([^&]+)/) || [])[1] || tag;
+              name = `${sanitizeFilename(location.pathname.split("/").pop().split("-")[0] || "model")}.${fmt}`;
+            }
+            capturedUrls.set(enc.contentUrl, { name, resolution: tag }); jc++;
+          }
+          if (jc) uiLog(`LD+JSON: ${jc} encodings`);
+        }
+      }
     } catch {}
 
     scanPerformance();
