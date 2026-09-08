@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.3
+// @version      4.4
 // @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
@@ -192,6 +192,30 @@
     }
   }
 
+  const RANK = { full_res: 0, "3m": 1, full: 1, "500k": 2, "200k": 3, "150k": 4, "100k": 5, ply: 6 };
+  function pickBest(found) {
+    if (!found || !found.length) return null;
+    const uniq = [...new Map(found.map(f => [f.url, f])).values()];
+    const spzOnly = uniq.filter(f => f.url.includes(".spz"));
+    const pool = spzOnly.length ? spzOnly : uniq;
+    pool.sort((a,b) => {
+      const ra = RANK[a.key] ?? 99, rb = RANK[b.key] ?? 99;
+      if (ra !== rb) return ra - rb;
+      return b.url.length - a.url.length;
+    });
+    return pool[0];
+  }
+
+  function pruneToSingleBestSpz() {
+    const spzEntries = [...capturedUrls.entries()].filter(([u,m]) => u.includes(".spz") && !m.isJson && m.resolution !== "json" && m.resolution !== "webp" && m.resolution !== "input");
+    if (spzEntries.length <= 1) return;
+    // keep only the globally best spz (1 spz per scene as user expects: 1 spz +1 json +1 webp = 3 files)
+    // if you need multi-asset worlds, switch to per-base pruning below
+    const best = pickBest(spzEntries.map(([u,m]) => ({ url: u, key: m.resolution })));
+    if (!best) return;
+    for (const [u] of spzEntries) if (u !== best.url) capturedUrls.delete(u);
+  }
+
   function onFileCaptured(url, name, size) {
     if (!capturedUrls.has(url)) {
       capturedUrls.set(url, { name, size, fromPage: true });
@@ -202,38 +226,45 @@
 
   function sanitizeFilename(s) { return String(s).replace(/[^a-z0-9_\-]+/gi, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "world"; }
 
+  const seenWorldIds = new Set();
   function addJsonAndThumbForWorld(world, displayHint) {
-    // world is the raw world object (from API)
     const worldId = world?.id || world?.world_id || world?.generation_output?.world_id || world?.generation_output?.id || null;
+    if (worldId && seenWorldIds.has(worldId)) return; // one bundle per world
+    if (worldId) seenWorldIds.add(worldId);
     const displayName = world?.generation_output?.display_name || world?.display_name || world?.name || displayHint || "world";
     const baseName = worldId ? `${worldId}` : sanitizeFilename(displayName);
-    // 1) json — store synthetic entry that download handler will synthesize
+    // only bundle per-world if we have an identifiable world id — prevents
+    // nested spz blobs creating extra world.json / input.png duplicates
+    if (!worldId) return;
+    // 1) json — one per worldId
     const jsonUrl = `json://${baseName}`;
     if (!capturedUrls.has(jsonUrl)) {
-      // collect minimal useful JSON: the whole world + spz hint
       const payload = JSON.stringify(world, null, 2);
       capturedUrls.set(jsonUrl, { name: `${sanitizeFilename(displayName) || baseName}.json`, resolution: "json", isJson: true, jsonData: payload, worldId });
       log("  + json ->", `${sanitizeFilename(displayName)}.json`);
     }
-    // 2) webp thumbnail — try mpi, cond_image, og:image fallback
-    let thumbUrl = world?.generation_output?.thumbnail_url || world?.thumbnail_url
-      || world?.generation_output?.cond_image_url || world?.cond_image_url || null;
-    // mpi base -> thumbnail_1440.webp (as in mjs)
+    // 2) webp thumbnail — prefer rendered thumbnail, NOT cond_image_url
+    //    cond_image is the input prompt image (95ac6d68_image_prompt_sanitized.png) — keep as secondary only if no thumb
+    let thumbUrl = world?.generation_output?.thumbnail_url || world?.thumbnail_url || null;
     if (!thumbUrl) {
       const mpi = world?.generation_output?.mpi_url || world?.mpi_url;
       if (mpi) thumbUrl = `${mpi.replace(/\/$/, "")}/thumbnail_1440.webp`;
     }
-    // fallback to og:image meta (public thumbnail)
     if (!thumbUrl) {
       const og = document.querySelector('meta[property="og:image"]')?.content || "";
-      if (og.includes("cdn.marble.worldlabs.ai") && og.includes(".webp")) thumbUrl = og.split("?")[0];
+      if (og.includes("cdn.marble.worldlabs.ai") && (og.includes(".webp") || og.includes(".png"))) thumbUrl = og.split("?")[0];
+    }
+    // cond_image as fallback last resort, but mark as input so user knows difference
+    let isInput = false;
+    if (!thumbUrl) {
+      thumbUrl = world?.generation_output?.cond_image_url || world?.cond_image_url || null;
+      if (thumbUrl) isInput = true;
     }
     if (thumbUrl && thumbUrl.includes("http") && !capturedUrls.has(thumbUrl)) {
       const tname = thumbUrl.split("/").pop().split("?")[0];
-      // ensure .webp extension
       const wname = tname.includes(".") ? tname : `${sanitizeFilename(displayName)}_thumb.webp`;
-      capturedUrls.set(thumbUrl, { name: wname, resolution: "webp" });
-      log("  + webp ->", wname);
+      capturedUrls.set(thumbUrl, { name: wname, resolution: isInput ? "input" : "webp", isInput });
+      log("  + webp ->", wname, isInput ? "(input)" : "");
     }
   }
 
@@ -254,32 +285,30 @@
         collectSpzUrls(w, found);
         if (found.length) {
           anySpz = true;
-          log(`Found ${found.length} spz urls for world ${w?.id || w?.world_id || "unknown"}`);
-          for (const { key, url } of found) {
-            if (url && typeof url === "string" && !capturedUrls.has(url)) {
-              const name = url.split("/").pop().split("?")[0];
-              capturedUrls.set(url, { name, resolution: key });
-              log("  +", key, "->", name);
-            }
-          }
+          const best = pickBest(found);
+          if (best && !capturedUrls.has(best.url)) {
+            const name = best.url.split("/").pop().split("?")[0];
+            capturedUrls.set(best.url, { name, resolution: best.key });
+            log(`  + best ${best.key} -> ${name} (from ${found.length} variants)`);
+          } else if (best) log(`  = best ${best.key} already captured`);
           addJsonAndThumbForWorld(w);
           const wName = w?.generation_output?.display_name || w?.display_name || w?.name;
           if (wName) worldDataList.push({ name: wName });
         }
       }
-      if (anySpz) { refreshPanel(); return; }
+      if (anySpz) { pruneToSingleBestSpz(); refreshPanel(); return; }
 
       // fallback: global recursive scan if per-world didn't hit (e.g. wrapped response)
       const found = [];
       collectSpzUrls(data, found);
       if (found.length) {
-        log(`Found ${found.length} urls via global scan`);
-        for (const { key, url } of found) {
-          if (url && typeof url === "string" && !capturedUrls.has(url)) {
-            capturedUrls.set(url, { name: url.split("/").pop().split("?")[0], resolution: key });
-            log("  +", key, "->", name);
-          }
+        const best = pickBest(found);
+        log(`Found ${found.length} urls via global scan, best: ${best?.key}`);
+        if (best && !capturedUrls.has(best.url)) {
+          capturedUrls.set(best.url, { name: best.url.split("/").pop().split("?")[0], resolution: best.key });
+          log("  +", best.key, "->", best.url.split("/").pop());
         }
+        pruneToSingleBestSpz();
         // still try to add json/thumb from top-level if it looks like a world
         if (data && typeof data === "object" && (data.id || data.generation_output)) addJsonAndThumbForWorld(data);
         const probe = (o, d=0) => {
@@ -520,7 +549,7 @@
       groups[res].push(item);
     }
 
-    const order = ["full", "full_res", "3M", "500k", "200k", "150k", "100k", "PLY", "json", "webp", "other"];
+    const order = ["full", "full_res", "3M", "500k", "200k", "150k", "100k", "PLY", "json", "webp", "input", "other"];
     const sorted = Object.entries(groups).sort((a, b) => {
       const ai = order.indexOf(a[0]), bi = order.indexOf(b[0]);
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -727,7 +756,8 @@
     // 5. Final perf re-scan after fetches
     scanPerformance();
 
-    // 6. Ensure 3-file bundle per scene: if spz exists but json/webp missing, synthesize
+    // 6. Enforce single-best spz + ensure 3-file bundle per scene
+    pruneToSingleBestSpz();
     const hasJson = [...capturedUrls.values()].some(v => v.resolution === "json");
     const hasWebp = [...capturedUrls.values()].some(v => v.resolution === "webp");
     if (capturedUrls.size > 0) {
@@ -736,12 +766,12 @@
         const title = document.querySelector('meta[property="og:title"]')?.content || document.title || wid;
         const spzList = [...capturedUrls.entries()].filter(([u,m])=> m.resolution && ["full","full_res","3M","500k","150k","100k","200k"].includes(m.resolution)).map(([u])=>u);
         if (spzList.length === 0 && capturedUrls.size>0) {
-          // fallback: any spz-like
           for (const [u,m] of capturedUrls) if (u.includes(".spz") && !m.isJson) spzList.push(u);
         }
         const payload = JSON.stringify({ worldId: wid, title, spz_urls: spzList, capturedAt: new Date().toISOString(), source: location.href }, null, 2);
-        const jUrl = `json://${wid}_fallback`;
-        if (!capturedUrls.has(jUrl)) {
+        // use canonical json key so we don't duplicate the API json
+        const jUrl = `json://${wid}`;
+        if (!capturedUrls.has(jUrl) && !hasJson) {
           capturedUrls.set(jUrl, { name: `${sanitizeFilename(title) || wid}.json`, resolution: "json", isJson: true, jsonData: payload });
           uiLog(`Fallback json: ${sanitizeFilename(title)}.json`);
         }
@@ -832,6 +862,7 @@
     const dbItems = await dbGetAll();
     const perf = scanPerformance();
     const emb = scanEmbeddedJson();
+    pruneToSingleBestSpz();
     const totalCount = capturedUrls.size + dbItems.filter(d => !capturedUrls.has(d.url)).length;
     if (totalCount > lastCount || perf || emb) refreshPanel();
   }, 3000);
