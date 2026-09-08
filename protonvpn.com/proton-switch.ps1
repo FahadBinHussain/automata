@@ -2,6 +2,7 @@
 # usage:
 #   proton-switch.ps1 list              # free servers by country (load, up count)
 #   proton-switch.ps1 <cc|name>         # connect, e.g: nl  us  jp  ro  or "NL-FREE#79"
+#   proton-switch.ps1 static <ovpn>     # connect from saved .ovpn, no api needed
 #   proton-switch.ps1 best              # lowest-load free server
 #   proton-switch.ps1 status            # current exit ip, lan, tailscale
 #   proton-switch.ps1 off               # kill tunnel
@@ -62,8 +63,50 @@ function Test-Coexistence {
   @{ Lan = $lan; Ts = $ts }
 }
 
+function Connect-Ovpn {
+  param($endpoint, $ovpn, $label)
+  try { $directIp = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 10).Trim() } catch { $directIp = $null }
+  "connecting: $label ($endpoint)"
+  Stop-Tunnel
+  # pin endpoint to the actual physical server (config may use domain)
+  $ovpn = $ovpn -replace '(?m)^remote \S+', "remote $endpoint"
+  if ($ovpn -notmatch '(?m)^disable-dco') { $ovpn = "disable-dco`n" + $ovpn }
+  Set-Content $ovpnPath $ovpn -Encoding ASCII
+
+  # pre-pin endpoint route via lan gateway so tunnel traffic never enters tailscale
+  route delete $endpoint mask 255.255.255.255 2>$null | Out-Null
+  route add $endpoint mask 255.255.255.255 $LAN_GW metric 1 | Out-Null
+
+  Remove-Item "$wg\current.log" -ErrorAction SilentlyContinue
+  Start-Process -FilePath 'C:\Program Files\OpenVPN\bin\openvpn.exe' -ArgumentList '--config', $ovpnPath, '--auth-user-pass', $auth, '--log', "$wg\current.log", '--verb', '3' -WindowStyle Hidden
+
+  # watchdog: a real tunnel ip must appear AND the exit ip must differ from
+  # pre-connect direct (checking ifconfig.me alone races redirect-gateway and
+  # "verifies" over direct). 60s max or kill, never stay offline silently.
+  $ok = $false; $ip = $null
+  foreach ($i in 1..12) {
+    Start-Sleep -Seconds 5
+    if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) { break }
+    $tunNow = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { ($_.InterfaceAlias -like '*OpenVPN*' -or $_.InterfaceAlias -like '*TAP*') -and $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' }
+    if (-not $tunNow) { continue }
+    try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 6).Trim() } catch { continue }
+    if ($null -eq $directIp -or $ip -ne $directIp) { $ok = $true; break }
+  }
+  if (-not $ok -or -not (Get-Process openvpn -ErrorAction SilentlyContinue)) {
+    Stop-Tunnel
+    Get-Content "$wg\current.log" -Tail 5 -ErrorAction SilentlyContinue | ForEach-Object { "  | $_" }
+    throw "connection failed - killed openvpn, you are back on direct. try another server."
+  }
+  $c = Test-Coexistence
+  "vpn exit: $ip"
+  "server: $label"
+  "lan: $($c.Lan)  tailscale-ssh: $($c.Ts)"
+  if (-not $c.Ts) { "WARNING: tailscale blocked on this server!" }
+  Set-Content "$wg\state.txt" $label -Encoding UTF8
+}
+
 switch ($args[0]) {
-  $null { throw "usage: list | best | <cc|name> | status | off" }
+  $null { throw "usage: list | best | <cc|name> | static <ovpn> | status | off" }
   'list' {
     $l = Get-Logicals | Sort-Object ExitCountry, Name
     $groups = $l | Group-Object ExitCountry
@@ -78,16 +121,41 @@ switch ($args[0]) {
     & $PSCommandPath $pick.Name
   }
   'status' {
-    try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 12).Trim(); "vpn exit: $ip" } catch { "vpn: not connected (direct)" }
-    if (Test-Path "$wg\state.txt") { "server: $(Get-Content "$wg\state.txt" -Raw)" }
+    # ON only when a real tunnel exists: openvpn running + non-link-local tunnel ip.
+    # (ifconfig.me alone can't distinguish vpn from direct - that false positive
+    # painted the gui green on direct connections.)
+    $tunUp = $null -ne (Get-Process openvpn -ErrorAction SilentlyContinue)
+    $tunIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { ($_.InterfaceAlias -like '*OpenVPN*' -or $_.InterfaceAlias -like '*TAP*') -and $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -ExpandProperty IPAddress
+    if ($tunUp -and $tunIp) {
+      try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 12).Trim(); "vpn exit: $ip" } catch { "vpn exit: (tunnel up, exit check failed)" }
+      if (Test-Path "$wg\state.txt") { "server: $(Get-Content "$wg\state.txt" -Raw)" }
+    } else {
+      try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 12).Trim(); "direct exit: $ip (vpn OFF)" } catch { "direct exit: (offline?)" }
+      if (Test-Path "$wg\state.txt") { "stale state: $((Get-Content "$wg\state.txt" -Raw).Trim()) (no tunnel!)" }
+      if ($tunUp) { "note: openvpn running but no tunnel ip yet (connecting?)" }
+    }
     $c = Test-Coexistence
     "lan: $($c.Lan)  tailscale-ssh: $($c.Ts)"
-    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -like '*OpenVPN*' } | ForEach-Object { "tunnel ip: $($_.IPAddress)" }
+    foreach ($t in $tunIp) { "tunnel ip: $t" }
   }
   'off' {
     Stop-Tunnel
     Remove-Item "$wg\state.txt" -ErrorAction SilentlyContinue
     "tunnel down (direct)"
+  }
+  'static' {
+    # no-API connect from a saved .ovpn (account limited? api dead? this still works)
+    $src = $args[1]
+    if (-not $src -or -not (Test-Path $src)) { throw "usage: static <path-to-ovpn>" }
+    $raw = Get-Content $src -Raw
+    $m = [regex]::Match($raw, '(?m)^remote\s+(\S+)')
+    if (-not $m.Success) { throw "no remote line in $src" }
+    $endpoint = $m.Groups[1].Value
+    if ($endpoint -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+      $endpoint = (Resolve-DnsName $endpoint -Type A -ErrorAction Stop | Select-Object -First 1).IPAddress.ToString()
+      "resolved endpoint -> $endpoint"
+    }
+    Connect-Ovpn $endpoint $raw "static:$(Split-Path $src -Leaf)"
   }
   default {
     $want = $args[0]
@@ -102,7 +170,7 @@ switch ($args[0]) {
     $upServers = @($pick.Servers | Where-Object Status -eq 1)
     if (-not $upServers) { throw "$($pick.Name) has 0 online servers, pick another" }
     $endpoint = ($upServers | Get-Random).EntryIp
-    "connecting: $($pick.Name) ($endpoint, load $($pick.Load)%)"
+    $label = "$($pick.Name) (load $($pick.Load)%)"
 
     Stop-Tunnel
     try {
@@ -112,34 +180,6 @@ switch ($args[0]) {
       Write-Output "proton config fetch failed: $($_.Exception.Message)"
       throw
     }
-    # pin endpoint to the actual physical server (config may use domain)
-    $ovpn = $ovpn -replace '(?m)^remote \S+', "remote $endpoint"
-    Set-Content $ovpnPath $ovpn -Encoding ASCII
-
-    # pre-pin endpoint route via lan gateway so tunnel traffic never enters tailscale
-    route delete $endpoint mask 255.255.255.255 2>$null | Out-Null
-    route add $endpoint mask 255.255.255.255 $LAN_GW metric 1 | Out-Null
-
-    Remove-Item "$wg\current.log" -ErrorAction SilentlyContinue
-    Start-Process -FilePath 'C:\Program Files\OpenVPN\bin\openvpn.exe' -ArgumentList '--config', $ovpnPath, '--auth-user-pass', $auth, '--log', "$wg\current.log", '--verb', '3' -WindowStyle Hidden
-
-    # watchdog: internet must come back in 50s or kill tunnel
-    $ok = $false
-    foreach ($i in 1..10) {
-      Start-Sleep -Seconds 5
-      try { $ip = (Invoke-RestMethod -Uri 'https://ifconfig.me/ip' -TimeoutSec 6).Trim(); $ok = $true; break } catch { }
-      if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) { break }
-    }
-    if (-not $ok) {
-      Stop-Tunnel
-      Get-Content "$wg\current.log" -Tail 5 -ErrorAction SilentlyContinue | ForEach-Object { "  | $_" }
-      throw "connection failed - killed openvpn, you are back on direct. try another server."
-    }
-    $c = Test-Coexistence
-    "vpn exit: $ip"
-    "server: $($pick.Name)"
-    "lan: $($c.Lan)  tailscale-ssh: $($c.Ts)"
-    if (-not $c.Ts) { "WARNING: tailscale blocked on this server!" }
-    Set-Content "$wg\state.txt" $pick.Name -Encoding UTF8
+    Connect-Ovpn $endpoint $ovpn $label
   }
 }
