@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.0
+// @version      4.1
 // @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
@@ -31,208 +31,207 @@
   log("Script loaded on", location.hostname + location.pathname, { isMarble });
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  PART 1: Service Worker (try blob URL, fallback to inline)
+  //  PART 1: Page-context interceptor (fixes sandbox vs page window split)
+  //  old code used window.fetch in the userscript sandbox (Tampermonkey
+  //  isolated world) — page's fetch is a different object so nothing was
+  //  captured (DOM 0, HTML CDN 0, API 404/403 via GM without auth).
+  //  fix: inject a <script> that patches fetch/XHR in the page itself and
+  //  relays via window.postMessage. Page's authenticated fetch (with cookies)
+  //  then succeeds and we capture spz_urls without needing our own auth.
   // ══════════════════════════════════════════════════════════════════════════
 
-  const SW_CODE = `
-    self.addEventListener('install', (e) => { self.skipWaiting(); });
-    self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
+  // must listen BEFORE injection — injected posts INJECT_READY etc
+  const capturedUrls = new Map();
+  const worldDataList = [];
 
-    self.addEventListener('fetch', (event) => {
-      const url = event.request.url;
-      const isSplat = url.includes('.spz') || url.includes('.ply');
-      const isApi = url.includes('/api/') || url.includes('generation_output');
+  // will be defined later but hoisted for listener
+  let _onFileCaptured = null;
+  let _onApiData = null;
+  let _refreshPanel = null;
+  let _uiLog = null;
 
-      if (!isSplat && !isApi) return;
+  window.addEventListener("message", (e) => {
+    if (!e.data || e.data.source !== "WL_DL_NET") return;
+    // console.debug(TAG, "message", e.data.type);
+    if (e.data.type === "INJECT_READY" && _uiLog) _uiLog("Interceptor ready (page)");
+    if (e.data.type === "FILE") {
+      const url = e.data.url;
+      const name = url.split("/").pop().split("?")[0];
+      if (_onFileCaptured) _onFileCaptured(url, name, 0);
+      else { if (!capturedUrls.has(url)) capturedUrls.set(url, { name }); if (_refreshPanel) _refreshPanel(); }
+      if (_uiLog) _uiLog(`File: ${name.slice(0, 44)}`);
+      log("page file:", name);
+    }
+    if (e.data.type === "API") {
+      if (_onApiData) _onApiData(e.data.data);
+      else log("early API", e.data.url);
+      if (_uiLog) _uiLog(`API: ${String(e.data.url).split("/").pop().slice(0,40)}`);
+    }
+    if (e.data.type === "API_TEXT") {
+      const text = e.data.text || "";
+      // extract any spz urls hidden in non-JSON text (e.g. streaming)
+      const re = /https:\/\/cdn\.marble\.worldlabs\.ai\/[^"'\s<>]+\.spz/g;
+      let m, cnt = 0;
+      for (m of text.matchAll(re)) {
+        if (!capturedUrls.has(m[0])) { capturedUrls.set(m[0], { name: m[0].split("/").pop().split("?")[0], fromText: true }); cnt++; }
+      }
+      if (cnt) { if (_refreshPanel) _refreshPanel(); if (_uiLog) _uiLog(`Text scan: ${cnt} spz`); }
+    }
+  });
 
-      event.respondWith((async () => {
-        const response = await fetch(event.request);
+  function injectInterceptor() {
+    const code = `(function(){
+      const TAG='[WL-DL:INJECT]';
+      const lg=(...a)=>console.log(TAG,...a);
+      lg('inject start', location.hostname+location.pathname);
+      try{
+        const _fetch=window.fetch.bind(window);
+        window.fetch=async function(input, init){
+          const url = typeof input==='string' ? input : (input && input.url) || '';
+          const res = await _fetch(input, init);
+          try{
+            if(url.includes('.spz')||url.includes('.ply')){
+              window.postMessage({source:'WL_DL_NET', type:'FILE', url}, '*');
+            }
+            if(url.includes('/api/')&&res.ok){
+              const ct=res.headers.get('content-type')||'';
+              const clone=res.clone();
+              if(ct.includes('json')){
+                clone.json().then(d=>{
+                  window.postMessage({source:'WL_DL_NET', type:'API', data:d, url}, '*');
+                }).catch(()=>{});
+              } else {
+                clone.text().then(t=>{
+                  if(t.includes('spz')||t.includes('generation_output')||t.includes('.spz')){
+                    try{ const d=JSON.parse(t); window.postMessage({source:'WL_DL_NET', type:'API', data:d, url}, '*'); }
+                    catch{ window.postMessage({source:'WL_DL_NET', type:'API_TEXT', text:t, url}, '*'); }
+                  }
+                }).catch(()=>{});
+              }
+            }
+          }catch(e){ lg('fetch wrap', e.message); }
+          return res;
+        };
+        lg('fetch patched');
+      }catch(e){ console.warn(TAG,'fetch patch fail',e.message); }
 
-        if (isSplat && response.ok) {
-          const clone = response.clone();
-          clone.arrayBuffer().then(bytes => {
-            const name = url.split('/').pop().split('?')[0];
-            // Store in IndexedDB
-            const req = indexedDB.open('WL_DL', 2);
-            req.onupgradeneeded = (e) => {
-              const db = e.target.result;
-              if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'url' });
-            };
-            req.onsuccess = (e) => {
-              const db = e.target.result;
-              if (!db.objectStoreNames.contains('files')) return;
-              const tx = db.transaction('files', 'readwrite');
-              tx.objectStore('files').put({ url, name, bytes, timestamp: Date.now(), size: bytes.byteLength });
-              // Notify all clients
-              self.clients.matchAll().then(clients => {
-                for (const c of clients) {
-                  c.postMessage({ type: 'SW_CAPT', url, name, size: bytes.byteLength });
+      try{
+        const oOpen=XMLHttpRequest.prototype.open, oSend=XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open=function(m,u,...r){ this._wlUrl=u; return oOpen.call(this,m,u,...r); };
+        XMLHttpRequest.prototype.send=function(...a){
+          this.addEventListener('load', function(){
+            const u=this._wlUrl||'';
+            try{
+              if(u.includes('.spz')||u.includes('.ply')){
+                window.postMessage({source:'WL_DL_NET', type:'FILE', url:u}, '*');
+              }
+              if(u.includes('/api/')&&this.status>=200&&this.status<300){
+                const ct=(this.getResponseHeader('content-type')||'');
+                if(ct.includes('json')||this.responseText.trim().startsWith('{')){
+                  try{ const d=JSON.parse(this.responseText); window.postMessage({source:'WL_DL_NET', type:'API', data:d, url:u}, '*'); }catch{}
+                } else if(this.responseText.includes('spz')){
+                  window.postMessage({source:'WL_DL_NET', type:'API_TEXT', text:this.responseText, url:u}, '*');
                 }
-              });
-            };
-          }).catch(() => {});
-        }
+              }
+            }catch{}
+          });
+          return oSend.apply(this,a);
+        };
+        lg('xhr patched');
+      }catch(e){ console.warn(TAG,'xhr patch fail',e.message); }
 
-        if (isApi && response.ok) {
-          response.clone().json().then(data => {
-            self.clients.matchAll().then(clients => {
-              for (const c of clients) c.postMessage({ type: 'SW_API', data });
-            });
-          }).catch(() => {});
-        }
+      // also catch performance entries that slipped through (injected poll)
+      window.postMessage({source:'WL_DL_NET', type:'INJECT_READY'}, '*');
+    })();`;
+    try {
+      const s = document.createElement("script");
+      s.textContent = code;
+      (document.documentElement || document.head || document.body).appendChild(s);
+      // keep in DOM briefly so CSP doesn't immediately GC it; remove later
+      setTimeout(() => { try{s.remove();}catch{} }, 2000);
+      log("Interceptor injected into page");
+    } catch (e) { err("inject failed:", e.message); }
+  }
 
-        return response;
-      })());
-    });
-  `;
+  // inject at document-start; if head not ready, wait briefly
+  if (document.documentElement) injectInterceptor();
+  else document.addEventListener("DOMContentLoaded", injectInterceptor, { once: true });
+  // also try again after a tick in case document_start ran before DOM
+  setTimeout(() => { if (!document.querySelector('script[data-wl-inject]')) injectInterceptor(); }, 500);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PART 2: Legacy SW/XHR/Worker removed — page injection replaces them.
+  //  We keep the IndexedDB helpers for cached file fallback, but no longer
+  //  register a blob SW (it was blocked by CSP and never reached ready).
+  // ══════════════════════════════════════════════════════════════════════════
 
   let swReady = false;
+  log("SW disabled — page fetch interception replaces it");
 
-  async function registerSW() {
-    if (!('serviceWorker' in navigator)) {
-      warn("Service Workers not supported");
-      return;
-    }
-    try {
-      const blob = new Blob([SW_CODE], { type: 'application/javascript' });
-      const swUrl = URL.createObjectURL(blob);
-      log("Registering SW from blob:", swUrl.slice(0, 50) + "...");
-      const reg = await navigator.serviceWorker.register(swUrl, { scope: '/' });
-      log("SW registered, scope:", reg.scope);
-      swReady = true;
-      URL.revokeObjectURL(swUrl);
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PART 3: Data processing (recursive spz finder)
+  // ══════════════════════════════════════════════════════════════════════════
 
-      // Also listen for SW messages
-      navigator.serviceWorker.addEventListener('message', (event) => {
-        const { type } = event.data || {};
-        if (type === 'SW_CAPT') {
-          log("SW captured file:", event.data.name, `(${(event.data.size / 1048576).toFixed(1)}MB)`);
-          onFileCaptured(event.data.url, event.data.name, event.data.size);
-        }
-        if (type === 'SW_API') {
-          log("SW intercepted API data");
-          onApiData(event.data.data);
-        }
-      });
-    } catch (e) {
-      err("SW registration failed:", e.message);
-      // Try without scope
-      try {
-        const blob = new Blob([SW_CODE], { type: 'application/javascript' });
-        const swUrl = URL.createObjectURL(blob);
-        const reg = await navigator.serviceWorker.register(swUrl);
-        log("SW registered (no scope), scope:", reg.scope);
-        swReady = true;
-        URL.revokeObjectURL(swUrl);
-      } catch (e2) {
-        err("SW retry also failed:", e2.message);
+  function collectSpzUrls(obj, out) {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) { for (const v of obj) collectSpzUrls(v, out); return; }
+    if (obj.spz_urls && typeof obj.spz_urls === "object") {
+      for (const [k, v] of Object.entries(obj.spz_urls)) {
+        if (typeof v === "string" && v.includes("http")) out.push({ key: k, url: v });
       }
     }
-  }
-
-  registerSW();
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  PART 2: Main-thread fetch interception
-  // ══════════════════════════════════════════════════════════════════════════
-
-  const capturedUrls = new Map();
-
-  const origFetch = window.fetch?.bind?.(window) || window.fetch;
-  if (origFetch) {
-    window.fetch = async function (...args) {
-      const url = typeof args[0] === "string" ? args[0] : args[0]?.url || "";
-      log("fetch:", url.slice(0, 120));
-      const res = await origFetch.apply(this, args);
-      try {
-        if (url.includes("/api/") && res.ok) {
-          const clone = res.clone();
-          clone.json().then(d => {
-            log("API response from", url.slice(0, 80));
-            onApiData(d);
-          }).catch(e => log("API json parse failed:", e.message));
-        }
-        if (url.includes(".spz") || url.includes(".ply")) {
-          const name = url.split("/").pop().split("?")[0];
-          log("Main-thread captured:", name);
-          capturedUrls.set(url, { name });
-          refreshPanel();
-        }
-      } catch (e) { log("fetch interceptor error:", e.message); }
-      return res;
-    };
-    log("Main-thread fetch interceptor installed");
-  } else {
-    warn("window.fetch not available at script start");
-  }
-
-  // Also intercept XMLHttpRequest
-  const origXhrOpen = XMLHttpRequest.prototype.open;
-  const origXhrSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this._wlUrl = url;
-    return origXhrOpen.call(this, method, url, ...rest);
-  };
-  XMLHttpRequest.prototype.send = function (...args) {
-    this.addEventListener("load", function () {
-      const url = this._wlUrl || "";
-      if (url.includes("/api/") && this.status === 200) {
-        try {
-          const data = JSON.parse(this.responseText);
-          log("XHR API response from", url.slice(0, 80));
-          onApiData(data);
-        } catch {}
+    // also direct spz link fields
+    for (const k of ["ply_url", "rad_url", "mpi_url", "cond_image_url"]) {
+      if (typeof obj[k] === "string" && obj[k].includes("http")) {
+        // only spz/ply rad should be captured as file; others as aux
+        if (k === "ply_url" || k === "rad_url") out.push({ key: k, url: obj[k] });
       }
-      if (url.includes(".spz") || url.includes(".ply")) {
-        const name = url.split("/").pop().split("?")[0];
-        log("XHR captured:", name);
-        capturedUrls.set(url, { name });
-        refreshPanel();
-      }
-    });
-    return origXhrSend.apply(this, args);
-  };
-  log("XHR interceptor installed");
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  PART 3: Worker constructor interception (catches blob Worker fetches)
-  // ══════════════════════════════════════════════════════════════════════════
-
-  const OrigWorker = window.Worker;
-  if (OrigWorker) {
-    window.Worker = function (url, options) {
-      const urlStr = url instanceof URL ? url.href : String(url);
-      if (urlStr.startsWith("blob:")) {
-        log("Intercepting blob Worker creation:", urlStr.slice(0, 60));
-        // We can't modify the blob content, but we can log that a Worker was created
-        // The SW should intercept its fetches
-      }
-      return new OrigWorker(url, options);
-    };
-    window.Worker.prototype = OrigWorker.prototype;
-    log("Worker constructor interceptor installed");
+    }
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === "object") collectSpzUrls(v, out);
+    }
   }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  PART 4: Data processing
-  // ══════════════════════════════════════════════════════════════════════════
-
-  const worldDataList = [];
 
   function onFileCaptured(url, name, size) {
     if (!capturedUrls.has(url)) {
-      capturedUrls.set(url, { name, size, fromSW: true });
+      capturedUrls.set(url, { name, size, fromPage: true });
       refreshPanel();
     }
   }
+  _onFileCaptured = onFileCaptured;
 
   function onApiData(data) {
     try {
+      const found = [];
+      collectSpzUrls(data, found);
+      if (found.length) {
+        log(`Found ${found.length} urls via recursive scan`);
+        for (const { key, url } of found) {
+          if (url && typeof url === "string") {
+            const name = url.split("/").pop().split("?")[0];
+            const meta = { name, resolution: key };
+            if (!capturedUrls.has(url)) {
+              capturedUrls.set(url, meta);
+              log("  +", key, "->", name);
+            }
+          }
+        }
+        // also capture display name if present
+        const probe = (o, d=0) => {
+          if (!o || d>4) return;
+          if (o.display_name || o.name) worldDataList.push({ name: o.display_name || o.name });
+          for (const v of Object.values(o)) if (v&&typeof v==='object') probe(v, d+1);
+        };
+        probe(data);
+        refreshPanel();
+        return;
+      }
+      // fallback to old shape
       const items = Array.isArray(data) ? data : [data];
       for (const w of items) {
-        const spzUrls = w?.generation_output?.spz_urls || w?.spz_urls;
+        const spzUrls = w?.generation_output?.spz_urls || w?.spz_urls || w?.data?.generation_output?.spz_urls;
         if (spzUrls && typeof spzUrls === "object" && Object.keys(spzUrls).length > 0) {
-          log("Found spz_urls:", Object.keys(spzUrls));
+          log("Found spz_urls (legacy):", Object.keys(spzUrls));
           for (const [key, url] of Object.entries(spzUrls)) {
             if (url && typeof url === "string") {
               const name = url.split("/").pop().split("?")[0];
@@ -240,12 +239,12 @@
               log("  +", key, "->", name);
             }
           }
-          const plyUrl = w?.generation_output?.ply_url || w?.ply_url;
+          const plyUrl = w?.generation_output?.ply_url || w?.ply_url || w?.data?.generation_output?.ply_url;
           if (plyUrl) {
             capturedUrls.set(plyUrl, { name: plyUrl.split("/").pop().split("?")[0], resolution: "ply" });
             log("  + PLY fallback:", plyUrl.split("/").pop());
           }
-          const worldName = w?.generation_output?.display_name || w?.display_name || "unknown";
+          const worldName = w?.generation_output?.display_name || w?.display_name || w?.data?.display_name || "unknown";
           worldDataList.push({ name: worldName });
           log("World:", worldName);
           refreshPanel();
@@ -253,9 +252,10 @@
       }
     } catch (e) { log("onApiData error:", e.message); }
   }
+  _onApiData = onApiData;
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  PART 5: IndexedDB retrieval
+  //  PART 4: IndexedDB retrieval
   // ══════════════════════════════════════════════════════════════════════════
 
   function dbGetAll() {
@@ -306,7 +306,7 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  PART 6: Panel UI
+  //  PART 5: Panel UI
   // ══════════════════════════════════════════════════════════════════════════
 
   GM_addStyle(`
@@ -366,7 +366,10 @@
       <button id="wl-dl-dlall" disabled>Download All</button>
     </div>
   `;
-  document.body.appendChild(panel);
+  // wait for body if document-start
+  if (!document.body) {
+    new MutationObserver((_, obs) => { if (document.body) { obs.disconnect(); document.body.appendChild(panel); } }).observe(document.documentElement, { childList: true });
+  } else document.body.appendChild(panel);
 
   const $ = (s) => panel.querySelector(s);
 
@@ -375,10 +378,11 @@
   function uiLog(msg) {
     const ts = new Date().toLocaleTimeString();
     logLines.push(`[${ts}] ${msg}`);
-    if (logLines.length > 50) logLines.shift();
+    if (logLines.length > 80) logLines.shift();
     const el = $("#wl-dl-log");
-    if (el) el.textContent = logLines.join("\n");
+    if (el) { el.textContent = logLines.join("\n"); el.scrollTop = el.scrollHeight; }
   }
+  _uiLog = uiLog;
 
   // Drag
   let dragging = false, dx = 0, dy = 0;
@@ -408,13 +412,13 @@
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  PART 7: Render & Download
+  //  PART 6: Render & Download
   // ══════════════════════════════════════════════════════════════════════════
 
   let lastCount = -1;
 
   async function refreshPanel() {
-    // Merge IndexedDB items
+    // Merge IndexedDB items (kept for backward compat, not required)
     const dbItems = await dbGetAll();
     for (const item of dbItems) {
       if (!capturedUrls.has(item.url)) {
@@ -429,10 +433,11 @@
     uiLog(`Panel refresh: ${allItems.length} items, SW:${swReady}, DB:${dbItems.length}`);
 
     const container = $("#wl-dl-assets");
+    if (!container) return;
     container.innerHTML = "";
 
     if (allItems.length === 0) {
-      $("#wl-dl-status").textContent = "No captures yet — " + (isMarble ? "interact with the world" : "scanning...");
+      $("#wl-dl-status").textContent = "No captures yet — " + (isMarble ? "interact or wait for world load" : "scanning...");
       $("#wl-dl-dlall").disabled = true;
       return;
     }
@@ -520,18 +525,67 @@
     $("#wl-dl-status").textContent = `${allItems.length} files captured`;
     $("#wl-dl-dlall").disabled = false;
   }
+  _refreshPanel = refreshPanel;
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  PART 8: Manual scan + probe
+  //  PART 7: Manual scan + fallbacks (performance, embedded JSON)
   // ══════════════════════════════════════════════════════════════════════════
+
+  function scanPerformance() {
+    try {
+      const entries = performance.getEntriesByType("resource") || [];
+      let cnt = 0;
+      for (const r of entries) {
+        if ((r.name.includes(".spz") || r.name.includes(".ply")) && !capturedUrls.has(r.name)) {
+          capturedUrls.set(r.name, { name: r.name.split("/").pop().split("?")[0], fromPerf: true });
+          cnt++;
+        }
+      }
+      if (cnt) uiLog(`Perf scan: ${cnt} assets`);
+      return cnt;
+    } catch { return 0; }
+  }
+
+  function scanEmbeddedJson() {
+    try {
+      const fullHtml = document.documentElement.outerHTML;
+      const re = /https:\/\/cdn\.marble\.worldlabs\.ai\/[^"'\s<>]+\.spz/g;
+      let m, cnt = 0;
+      for (m of fullHtml.matchAll(re)) {
+        if (!capturedUrls.has(m[0])) { capturedUrls.set(m[0], { name: m[0].split("/").pop().split("?")[0], fromHtml: true }); cnt++; }
+      }
+      // also scan all script tag contents for spz_urls dumps
+      for (const s of document.querySelectorAll("script")) {
+        const t = s.textContent || "";
+        if (!t.includes("spz")) continue;
+        for (m of t.matchAll(re)) {
+          if (!capturedUrls.has(m[0])) { capturedUrls.set(m[0], { name: m[0].split("/").pop().split("?")[0], fromScript: true }); cnt++; }
+        }
+        // also look for spz_urls JSON blobs with relative paths — try to extract urls inside object
+        const j = t.matchAll(/"spz_urls"\s*:\s*\{[^}]+\}/g);
+        for (const jm of j) {
+          for (const um of jm[0].matchAll(/https[^"']+\.spz/g)) {
+            if (!capturedUrls.has(um[0])) { capturedUrls.set(um[0], { name: um[0].split("/").pop().split("?")[0] }); cnt++; }
+          }
+        }
+      }
+      if (cnt) uiLog(`Embed scan: ${cnt} assets`);
+      return cnt;
+    } catch (e) { uiLog(`Embed scan error: ${e.message}`); return 0; }
+  }
 
   async function manualScan() {
     uiLog("Manual scan started...");
-    $("#wl-dl-status").textContent = "Scanning...";
+    const st = $("#wl-dl-status");
+    if (st) st.textContent = "Scanning...";
+
+    // 0. Perf + embed fallbacks first (catch already-loaded spz)
+    scanPerformance();
+    scanEmbeddedJson();
 
     // 1. Scan DOM
     let domCount = 0;
-    for (const el of document.querySelectorAll('link[href], script[src], img[src]')) {
+    for (const el of document.querySelectorAll('link[href], script[src], img[src], a[href]')) {
       const url = el.href || el.src;
       if (!url) continue;
       try {
@@ -544,7 +598,7 @@
     }
     uiLog(`DOM scan: ${domCount} assets found`);
 
-    // 2. Scan page HTML for CDN URLs
+    // 2. Scan page HTML for CDN URLs (already done in embed, but keep log)
     try {
       const html = document.documentElement.outerHTML;
       const cdnMatches = html.matchAll(/https?:\/\/cdn\.marble\.worldlabs\.ai\/[^\s"'<>]+\.spz/g);
@@ -556,66 +610,31 @@
           cdnCount++;
         }
       }
-      uiLog(`HTML CDN scan: ${cdnCount} .spz URLs found`);
+      if (cdnCount) uiLog(`HTML CDN scan: ${cdnCount} .spz URLs found`);
     } catch (e) { uiLog(`HTML scan error: ${e.message}`); }
 
-    // 3. Try to fetch world page directly and extract URLs
+    // 3. Marble: log World ID but DO NOT probe broken 404/403 endpoints.
+    //    World data is now captured via page fetch interception above.
     if (isMarble) {
       const worldMatch = location.pathname.match(/\/world\/([a-f0-9-]+)/);
       if (worldMatch) {
         const worldId = worldMatch[1];
         uiLog(`World ID: ${worldId}`);
-
-        // Probe common CDN paths
-        const probes = [
-          `https://cdn.marble.worldlabs.ai/${worldId}/`,
-        ];
-        for (const base of probes) {
-          uiLog(`Probing: ${base}`);
-          GM_xmlhttpRequest({
-            method: "GET",
-            url: base,
-            onload: (resp) => {
-              uiLog(`Probe ${resp.status}: ${resp.responseText?.slice(0, 200) || "empty"}`);
-            },
-            onerror: (e) => {
-              uiLog(`Probe error: ${e}`);
-            },
-          });
-        }
-
-        // Try fetching the world data from the API (may need auth)
-        const apiUrls = [
-          `https://api.worldlabs.ai/api/v1/objects/${worldId}`,
-          `https://api.worldlabs.ai/v1/objects/${worldId}`,
-        ];
-        for (const apiUrl of apiUrls) {
-          GM_xmlhttpRequest({
-            method: "GET",
-            url: apiUrl,
-            headers: { "Accept": "application/json" },
-            onload: (resp) => {
-              uiLog(`API ${resp.status} from ${apiUrl.split("/").pop()}`);
-              if (resp.status === 200) {
-                try {
-                  const data = JSON.parse(resp.responseText);
-                  onApiData(data);
-                } catch (e) { uiLog(`API parse error: ${e.message}`); }
-              } else {
-                uiLog(`Response: ${resp.responseText?.slice(0, 200)}`);
-              }
-            },
-            onerror: (e) => uiLog(`API error: ${e}`),
-          });
-        }
+        // hint: actual CDN prefix can be read from og:image meta (public)
+        const og = document.querySelector('meta[property="og:image"]')?.content || "";
+        if (og.includes("cdn.marble.worldlabs.ai")) uiLog(`CDN prefix hint: ${og.split("/").slice(0,5).join("/")}`);
+        // no longer probing https://cdn.marble.../{worldId}/ (S3 403) or
+        // unauthed https://api.worldlabs.ai/api/v1/objects/* (403)
+        // — interception will fill once the page's authenticated world fetch completes
       }
     }
 
-    // 4. Scan all script sources for .spz URLs
+    // 4. Scan all script sources for .spz URLs (with timeout guard)
     let scriptCount = 0;
-    for (const script of document.querySelectorAll("script[src]")) {
+    const scripts = [...document.querySelectorAll("script[src]")].slice(0, 20);
+    for (const script of scripts) {
       try {
-        const res = await fetch(script.src);
+        const res = await fetch(script.src, { signal: AbortSignal.timeout(4000) });
         const text = await res.text();
         const matches = text.matchAll(/["'](https?:\/\/[^"']*\.(spz|ply))["']/g);
         for (const m of matches) {
@@ -624,14 +643,13 @@
             scriptCount++;
           }
         }
-        // Also look for CDN base patterns
-        const cdnMatches = text.matchAll(/cdn\.marble\.worldlabs\.ai[^"'\s]*/g);
-        for (const m of cdnMatches) {
-          uiLog(`Script CDN ref: ${m[0].slice(0, 100)}`);
-        }
       } catch {}
     }
-    uiLog(`Script scan: ${scriptCount} assets found`);
+    if (scriptCount) uiLog(`Script scan: ${scriptCount} assets found`);
+    else uiLog(`Script scan: 0 assets found`);
+
+    // 5. Final perf re-scan after fetches
+    scanPerformance();
 
     await refreshPanel();
     uiLog("Scan complete. Total captured: " + capturedUrls.size);
@@ -683,10 +701,12 @@
   $("#wl-dl-dlall").addEventListener("click", downloadAll);
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  PART 9: Auto-scan on load + periodic refresh
+  //  PART 8: Auto-scan on load + periodic refresh
   // ══════════════════════════════════════════════════════════════════════════
 
-  uiLog("Script initialized. SW:" + (swReady ? "ready" : "pending"));
+  uiLog("Script initialized. Interceptor: injected");
+  // also show perf immediately
+  setTimeout(scanPerformance, 1000);
 
   // Wait for DOM then scan
   if (document.readyState === "loading") {
@@ -698,8 +718,10 @@
   // Periodic refresh
   setInterval(async () => {
     const dbItems = await dbGetAll();
+    const perf = scanPerformance();
+    const emb = scanEmbeddedJson();
     const totalCount = capturedUrls.size + dbItems.filter(d => !capturedUrls.has(d.url)).length;
-    if (totalCount > lastCount) refreshPanel();
+    if (totalCount > lastCount || perf || emb) refreshPanel();
   }, 3000);
 
   // For marble: also try fetching the world page content after a delay
@@ -708,5 +730,6 @@
       uiLog("Delayed marble scan...");
       manualScan();
     }, 8000);
+    setTimeout(manualScan, 15000);
   }
 })();
