@@ -1,0 +1,546 @@
+<!doctype html>
+<!--
+  worldlabs scene compare viewer  (automata/worldlabs.ai/compare)
+
+  purpose : render a downloaded .spz scene locally and compare it against the
+            ORIGINAL worldlabs render, to verify scene quality / camera angle /
+            framing are identical before re-uploading anywhere.
+
+  serve   : node serve.mjs --root "C:\Users\<user>\Downloads" --port 8123
+            (root defaults to %USERPROFILE%\Downloads)
+            then open http://127.0.0.1:8123/automata/worldlabs.ai/compare/index.html
+
+  params  : ?spz=/<file>.spz  ?config=/<file>.json  ?ref=/<file>.webp  ?world=<worldId>
+            (all optional; defaults point at the Heavenly Gateway to Jannah bundle)
+
+  NOTE    : the original site cannot be embedded - marble.worldlabs.ai sends
+            x-frame-options: DENY and CSP frame-ancestors 'none'. comparison is
+            done against worldlabs' own published render (thumbnail_1440.webp).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>scene compare — worldlabs</title>
+<style>
+  :root{
+    --bg:#0b0b0d; --panel:#141418; --line:#2a2a31; --ink:#e8e8ee; --dim:#8b8b98;
+    --ours:#5b9dff; --orig:#ffb545; --ok:#3ddc97; --bad:#ff5c6c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       display:flex;flex-direction:column;overflow:hidden}
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{background:#1e1e25;border:1px solid var(--line);border-radius:7px;
+         padding:6px 11px;cursor:pointer}
+  button:hover{border-color:#3d3d47;background:#25252e}
+  button.on{background:var(--ours);border-color:var(--ours);color:#06121f;font-weight:600}
+  a{color:var(--ours)}
+
+  header{display:flex;align-items:center;gap:10px;padding:9px 14px;
+         border-bottom:1px solid var(--line);background:var(--panel);flex:0 0 auto;flex-wrap:wrap}
+  .brand{font-weight:700;letter-spacing:.02em}
+  .brand span{color:var(--dim);font-weight:400;margin-left:6px;font-size:12px}
+  .modes{display:flex;gap:5px}
+  .spacer{flex:1}
+  .chk{display:flex;align-items:center;gap:6px;color:var(--dim);cursor:pointer}
+  .warn{background:#3a2a12;border:1px solid #7a5a1e;color:#ffd48a;
+        padding:5px 10px;border-radius:7px;font-size:12px}
+
+  main{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;min-height:0}
+  main.single{grid-template-columns:1fr}
+  .pane{min-width:0;min-height:0;display:flex;flex-direction:column;gap:6px;position:relative}
+  .pane.overlay{position:absolute;inset:12px;z-index:5;pointer-events:none}
+  .lbl{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ours)}
+  .pane.b .dot{background:var(--orig)}
+  .box{position:relative;flex:1;min-height:0;background:#000;border:1px solid var(--line);
+       border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  main:not(.single) .pane .box,main.single .pane .box{aspect-ratio:3/2;flex:0 0 auto;height:100%;margin:0 auto}
+  main.free .pane .box{aspect-ratio:auto;height:100%;width:100%}
+  .host{position:absolute;inset:0}
+  .host canvas{display:block;width:100%;height:100%}
+  #ref{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+  #diffc{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;display:none}
+  #wipeBar{position:absolute;top:0;bottom:0;width:2px;background:#fff;opacity:.7;display:none;z-index:6}
+  .score{position:absolute;left:10px;bottom:10px;z-index:7;background:rgba(0,0,0,.72);
+         border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-variant-numeric:tabular-nums}
+
+  aside{flex:0 0 296px;border-left:1px solid var(--line);background:var(--panel);
+        padding:12px;overflow:auto}
+  aside h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+  aside h3:not(:first-child){margin-top:16px}
+  .row{display:grid;grid-template-columns:74px 1fr;gap:6px;align-items:center;margin-bottom:5px}
+  .row label{color:var(--dim);font-size:12px}
+  .row input[type=number]{background:#0e0e12;border:1px solid var(--line);border-radius:6px;
+        padding:4px 7px;width:100%;font-variant-numeric:tabular-nums}
+  .tri{grid-template-columns:74px repeat(3,1fr)}
+  .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  textarea{width:100%;height:132px;background:#0e0e12;border:1px solid var(--line);
+           border-radius:6px;padding:7px;font:11px/1.4 ui-monospace,monospace;resize:vertical}
+  .meta{color:var(--dim);font-size:12px}
+  .meta b{color:var(--ink);font-weight:600}
+  .file{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .file input{display:none}
+  .file span{color:var(--dim);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  #veil{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+        background:rgba(6,6,9,.82);text-align:center;padding:24px}
+  #veil .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:20px 24px;max-width:560px}
+  #veil.err .card{border-color:var(--bad)}
+  #veil h2{margin:0 0 8px;font-size:16px}
+  #veil p{margin:6px 0;color:var(--dim)}
+  #veil code{background:#0e0e12;padding:1px 5px;border-radius:4px;color:var(--ink)}
+  #drop{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+        background:rgba(91,157,255,.14);border:3px dashed var(--ours);font-size:18px;font-weight:600}
+  #drop.on{display:flex}
+  .hide{display:none !important}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">scene compare <span>worldlabs ↔ local</span></div>
+  <div class="modes">
+    <button data-mode="side" class="on">side by side</button>
+    <button data-mode="wipe">wipe</button>
+    <button data-mode="blink">blink</button>
+    <button data-mode="diff">difference</button>
+  </div>
+  <div class="spacer"></div>
+  <label class="chk"><input type="checkbox" id="lock" checked> lock 3:2 (match reference)</label>
+  <button id="snap">snapshot png</button>
+  <a id="orig" href="#" target="_blank" rel="noreferrer">open original site ↗</a>
+</header>
+
+<main id="stage">
+  <section class="pane a" id="paneA">
+    <div class="lbl"><i class="dot"></i> ours — local render <span id="srcName" class="meta"></span></div>
+    <div class="box">
+      <div class="host" id="host"></div>
+      <canvas id="diffc"></canvas>
+      <div id="wipeBar"></div>
+      <div class="score" id="score"></div>
+    </div>
+  </section>
+  <section class="pane b" id="paneB">
+    <div class="lbl"><i class="dot"></i> original — worldlabs render <span id="refName" class="meta"></span></div>
+    <div class="box"><img id="ref" alt="original worldlabs render"></div>
+  </section>
+</main>
+
+<aside>
+  <h3>source</h3>
+  <div class="file"><button id="pickSpz">load .spz</button><span id="spzName">—</span>
+    <input type="file" id="fSpz" accept=".spz,.ply,.splat"></div>
+  <div class="file"><button id="pickCfg">load .json</button><span id="cfgName">—</span>
+    <input type="file" id="fCfg" accept=".json"></div>
+  <div class="file"><button id="pickRef">load reference</button><span id="refName2">—</span>
+    <input type="file" id="fRef" accept="image/*"></div>
+
+  <h3>scene info</h3>
+  <div class="meta" id="info">loading…</div>
+
+  <h3>camera + transform</h3>
+  <div class="row"><label>fov (deg)</label><input type="number" id="fov" step="1"></div>
+  <div class="row"><label>scale</label><input type="number" id="scale" step="0.1"></div>
+  <div class="row"><label>cam radius</label><input type="number" id="crad" step="0.1" placeholder="empty = auto-fit"></div>
+  <div class="row tri"><label>position</label>
+    <input type="number" id="px" step="0.1"><input type="number" id="py" step="0.1"><input type="number" id="pz" step="0.1"></div>
+  <div class="row tri"><label>rotation°</label>
+    <input type="number" id="rx" step="1"><input type="number" id="ry" step="1"><input type="number" id="rz" step="1"></div>
+  <div class="row tri"><label>offset</label>
+    <input type="number" id="ox" step="0.1"><input type="number" id="oy" step="0.1"><input type="number" id="oz" step="0.1"></div>
+  <div class="btns">
+    <button id="apply">apply</button>
+    <button id="fit">auto-fit camera</button>
+    <button id="reset">reset to json</button>
+  </div>
+
+  <h3>config json</h3>
+  <textarea id="json" spellcheck="false"></textarea>
+  <div class="btns">
+    <button id="fromJson">apply json ↑</button>
+    <button id="copy">copy</button>
+    <button id="dl">download</button>
+  </div>
+  <p class="meta" id="note" style="margin-top:8px"></p>
+</aside>
+
+<div id="veil"><div class="card">
+  <h2 id="vTitle">loading scene…</h2><p id="vBody">fetching splat + config</p>
+</div></div>
+<div id="drop">drop .spz / .json / image</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark":"https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+}}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+
+const q        = new URLSearchParams(location.search);
+const D        = {
+  spz:    "/31b40b75-fa05-403c-9bef-def66948e218_ceramic.spz",
+  config: "/Heavenly_Gateway_to_Jannah.json",
+  ref:    "/thumbnail_1440.webp",
+  world:  "31b40b75-fa05-403c-9bef-def66948e218",
+};
+const SPZ_URL = q.get("spz")    || D.spz;
+const CFG_URL = q.get("config") || D.config;
+const REF_URL = q.get("ref")    || D.ref;
+const WORLD   = q.get("world")  || D.world;
+
+const $  = (s) => document.querySelector(s);
+const veil = $("#veil");
+const say  = (t, b, isErr) => {
+  veil.classList.toggle("err", !!isErr);
+  $("#vTitle").textContent = t; $("#vBody").innerHTML = b || "";
+  veil.classList.remove("hide");
+};
+const hush = () => veil.classList.add("hide");
+
+// ── config shape ────────────────────────────────────────────────────────────
+// the json found in Downloads is the flat view-config consumed by the imgvault
+// scene viewer: {position, rotation(rad), offset, scale, fov, radius, duration}.
+// when cameraRadius is absent the viewer AUTO-FITS the camera to the splat
+// bounding sphere - that path is reproduced exactly here so framing matches.
+const cfg = {
+  position: [0, 0, 0], rotation: [0, 0, 0], offset: [0, 0, 0],
+  scale: 1, fov: 75, cameraRadius: null, radius: null, duration: null,
+};
+let savedCfg = JSON.parse(JSON.stringify(cfg));
+
+// ── three / spark ───────────────────────────────────────────────────────────
+const scene    = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0b0d);
+const camera   = new THREE.PerspectiveCamera(cfg.fov, 1.5, 0.01, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance",
+                                           preserveDrawingBuffer:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+$("#host").appendChild(renderer.domElement);
+
+const spark = new SparkRenderer({ renderer });
+scene.add(spark);
+scene.add(new THREE.AmbientLight(0xffffff, 3.0));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.05;
+
+const root   = new THREE.Group();      // position / rotation / scale from json
+const inner  = new THREE.Group();      // offset (worldlabs field), applied separately
+root.add(inner); scene.add(root);
+let mesh = null;
+
+// ── sizing ──────────────────────────────────────────────────────────────────
+function resize() {
+  const r = $("#host").getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / r.height; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe($("#host"));
+
+// ── apply config (mirrors the imgvault scene-viewer camera logic) ───────────
+function applyCfg(opts = {}) {
+  root.position.set(...cfg.position);
+  root.rotation.set(...cfg.rotation);
+  root.scale.setScalar(cfg.scale);
+  inner.position.set(...cfg.offset);
+
+  if (camera.fov !== cfg.fov) { camera.fov = cfg.fov; }
+  camera.updateProjectionMatrix();
+
+  if (cfg.cameraRadius) {
+    camera.position.set(0, 0, cfg.cameraRadius);
+    camera.lookAt(0, 0, 0);
+    controls.target.set(0, 0, 0); controls.update();
+  } else if (opts.fit !== false) {
+    autoFit();
+  }
+  syncInputs();
+}
+
+// auto-fit: dist = boundsRadius / sin(fov/2) * 1.05  (same as the reference viewer)
+function autoFit() {
+  if (!mesh) return;
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(mesh);
+  if (box.isEmpty()) return;
+  const sph = box.getBoundingSphere(new THREE.Sphere());
+  if (!Number.isFinite(sph.radius) || sph.radius <= 0) return;
+  const dist = sph.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.05;
+  const dir  = camera.position.clone().sub(sph.center);
+  if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1);
+  dir.normalize();
+  controls.target.copy(sph.center);
+  camera.position.copy(sph.center).addScaledVector(dir, dist);
+  camera.lookAt(sph.center); controls.update();
+  $("#info").dataset.radius = sph.radius.toFixed(2);
+}
+
+// ── load ────────────────────────────────────────────────────────────────────
+async function loadConfig(url) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    Object.assign(cfg, {
+      position: j.position || [0,0,0],
+      rotation: j.rotation || [0,0,0],
+      offset:   j.offset   || [0,0,0],
+      scale:    Number.isFinite(+j.scale) ? +j.scale : 4.5,
+      fov:      Number.isFinite(+j.fov)   ? +j.fov   : 90,
+      cameraRadius: Number.isFinite(+j.cameraRadius) ? +j.cameraRadius : null,
+      radius:   j.radius ?? null,
+      duration: j.duration ?? null,
+    });
+    savedCfg = JSON.parse(JSON.stringify(cfg));
+    $("#cfgName").textContent = url.split("/").pop();
+  } catch (e) {
+    // loud: no silent default
+    document.querySelector("header").insertAdjacentHTML("afterbegin",
+      `<div class="warn">config not loaded (${url.split("/").pop()}: ${e.message}) — using built-in defaults</div>`);
+  }
+}
+
+function loadSplat(src, label) {
+  if (mesh) { root.remove(mesh); mesh = null; }
+  const t0 = performance.now();
+  mesh = new SplatMesh({ url: src, onLoad: () => {
+    const ms = Math.round(performance.now() - t0);
+    inner.add(mesh);
+    applyCfg();
+    hush();
+    $("#info").innerHTML =
+      `splats <b>${(mesh.numSplats ?? 0).toLocaleString()}</b><br>` +
+      `bounds radius <b>${($("#info").dataset.radius || "—")}</b><br>` +
+      `load <b>${ms} ms</b><br>` +
+      `fov <b>${cfg.fov}</b> · scale <b>${cfg.scale}</b> · cam radius <b>${cfg.cameraRadius ?? "auto-fit"}</b>`;
+    resize();
+  }});
+  mesh.quaternion.set(0,0,0,1);
+  $("#spzName").textContent = label || String(src).split("/").pop();
+  $("#srcName").textContent = "· " + ($("#spzName").textContent || "");
+  // explicit failure surface (no silent blank)
+  setTimeout(() => { if (!mesh || !mesh.numSplats) {
+    if (!veil.classList.contains("hide")) return;
+    say("splat produced 0 splats", "the file loaded but decoded empty — check the .spz", true);
+  }}, 8000);
+}
+
+async function boot() {
+  if (location.protocol === "file:" && !q.get("spz")) {
+    say("open this over http, not file://",
+      "run <code>node serve.mjs</code> (root defaults to %USERPROFILE%\\Downloads) then open " +
+      "<code>http://127.0.0.1:8123/automata/worldlabs.ai/compare/index.html</code><br><br>" +
+      "(or drop a .spz / .json onto this page right now)", false);
+    return;
+  }
+  say("loading scene…", "fetching splat + config");
+  $("#orig").href = `https://marble.worldlabs.ai/world/${WORLD}`;
+  $("#ref").src = REF_URL;
+  $("#refName").textContent = "· " + REF_URL.split("/").pop();
+  await loadConfig(CFG_URL);
+  loadSplat(SPZ_URL);
+}
+
+// ── compare modes ───────────────────────────────────────────────────────────
+const stage = $("#stage"), paneB = $("#paneB"), refImg = $("#ref");
+let mode = "side", blinkOn = true, blinkT = null;
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll(".modes button").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
+  stage.classList.toggle("single", m !== "side");
+  paneB.classList.toggle("overlay", m !== "side");
+  paneB.classList.toggle("hide", m === "diff");
+  $("#diffc").style.display = m === "diff" ? "block" : "none";
+  $("#wipeBar").style.display = m === "wipe" ? "block" : "none";
+  $("#score").style.display = m === "diff" ? "block" : "none";
+  clearInterval(blinkT); blinkT = null;
+  paneB.style.opacity = 1; paneB.style.clipPath = "none";
+  if (m === "wipe") { paneB.style.clipPath = "inset(0 0 0 50%)"; $("#wipeBar").style.left = "50%"; }
+  if (m === "blink") blinkT = setInterval(() => {
+    blinkOn = !blinkOn; paneB.style.opacity = blinkOn ? 1 : 0;
+  }, 700);
+  resize();
+}
+document.querySelectorAll(".modes button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+
+// wipe slider
+stage.addEventListener("pointermove", (e) => {
+  if (mode !== "wipe") return;
+  const r = paneB.getBoundingClientRect();
+  const p = Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100));
+  paneB.style.clipPath = `inset(0 0 0 ${p}%)`;
+  $("#wipeBar").style.left = p + "%";
+});
+
+// difference
+const diffc = $("#diffc"), dctx = diffc.getContext("2d", { willReadFrequently:true });
+const DW = 480, DH = 320;
+diffc.width = DW; diffc.height = DH;
+function drawDiff() {
+  if (mode !== "diff") return;
+  dctx.clearRect(0, 0, DW, DH);
+  try { dctx.drawImage(renderer.domElement, 0, 0, DW, DH); } catch { return; }
+  const a = dctx.getImageData(0, 0, DW, DH);
+  dctx.clearRect(0, 0, DW, DH);
+  try { dctx.drawImage(refImg, 0, 0, DW, DH); } catch { return; }
+  const b = dctx.getImageData(0, 0, DW, DH);
+  const out = dctx.createImageData(DW, DH);
+  let sum = 0;
+  for (let i = 0; i < a.data.length; i += 4) {
+    const dr = Math.abs(a.data[i]   - b.data[i]);
+    const dg = Math.abs(a.data[i+1] - b.data[i+1]);
+    const db = Math.abs(a.data[i+2] - b.data[i+2]);
+    const d  = (dr + dg + db) / 3;
+    sum += d;
+    out.data[i] = dr; out.data[i+1] = dg; out.data[i+2] = db; out.data[i+3] = 255;
+  }
+  dctx.putImageData(out, 0, 0);
+  const mad  = sum / (DW * DH);
+  const pct  = (mad / 255) * 100;
+  const match = Math.max(0, 100 - pct * 3).toFixed(1);
+  $("#score").innerHTML = `mean abs diff <b>${pct.toFixed(1)}%</b> · match <b>${match}%</b>`;
+}
+
+// ── inputs ──────────────────────────────────────────────────────────────────
+const R2D = 180 / Math.PI, D2R = Math.PI / 180;
+function syncInputs() {
+  $("#fov").value = cfg.fov; $("#scale").value = cfg.scale;
+  $("#crad").value = cfg.cameraRadius ?? "";
+  ["px","py","pz"].forEach((k, i) => $("#" + k).value = cfg.position[i]);
+  ["rx","ry","rz"].forEach((k, i) => $("#" + k).value = +(cfg.rotation[i] * R2D).toFixed(3));
+  ["ox","oy","oz"].forEach((k, i) => $("#" + k).value = cfg.offset[i]);
+  syncJson();
+}
+function readInputs() {
+  cfg.fov   = +$("#fov").value;
+  cfg.scale = +$("#scale").value;
+  const cr  = $("#crad").value;
+  cfg.cameraRadius = cr === "" ? null : +cr;
+  cfg.position = ["px","py","pz"].map(k => +$("#" + k).value);
+  cfg.rotation = ["rx","ry","rz"].map(k => +$("#" + k).value * D2R);
+  cfg.offset   = ["ox","oy","oz"].map(k => +$("#" + k).value);
+}
+const outJson = () => JSON.stringify({
+  position: cfg.position.map(n => +n.toFixed(6)),
+  rotation: cfg.rotation.map(n => +n.toFixed(6)),
+  offset:   cfg.offset.map(n => +n.toFixed(6)),
+  scale:    +cfg.scale.toFixed(4),
+  fov:      +cfg.fov.toFixed(2),
+  radius:   cfg.radius, duration: cfg.duration,
+}, null, 2);
+function syncJson(){ $("#json").value = outJson(); }
+
+$("#apply").onclick  = () => { readInputs(); applyCfg(); };
+$("#fit").onclick    = () => autoFit();
+$("#reset").onclick  = () => { Object.assign(cfg, JSON.parse(JSON.stringify(savedCfg))); applyCfg(); };
+$("#fromJson").onclick = () => {
+  try {
+    const j = JSON.parse($("#json").value);
+    Object.assign(cfg, {
+      position: j.position || cfg.position, rotation: j.rotation || cfg.rotation,
+      offset: j.offset || cfg.offset,
+      scale: Number.isFinite(+j.scale) ? +j.scale : cfg.scale,
+      fov: Number.isFinite(+j.fov) ? +j.fov : cfg.fov,
+      cameraRadius: Number.isFinite(+j.cameraRadius) ? +j.cameraRadius : null,
+    });
+    applyCfg({ fit: !cfg.cameraRadius });
+  } catch (e) { alert("bad json: " + e.message); }
+};
+$("#copy").onclick = async () => {
+  await navigator.clipboard.writeText(outJson());
+  $("#note").textContent = "copied to clipboard";
+  setTimeout(() => $("#note").textContent = "", 1800);
+};
+$("#dl").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([outJson()], { type: "application/json" }));
+  a.download = "scene-config.json"; a.click();
+};
+$("#snap").onclick = () => {
+  const a = document.createElement("a");
+  a.href = renderer.domElement.toDataURL("image/png");
+  a.download = "local-render.png"; a.click();
+};
+$("#lock").onchange = (e) => {
+  stage.classList.toggle("free", !e.target.checked);
+  if (!e.target.checked) $("#note").textContent = "aspect unlocked — wipe/diff compare is no longer 1:1";
+  else $("#note").textContent = "";
+  resize();
+};
+
+// ── file pickers + drag & drop ──────────────────────────────────────────────
+const pick = (btn, input, fn) => { btn.onclick = () => input.click();
+  input.onchange = () => { if (input.files[0]) fn(input.files[0]); }; };
+pick($("#pickSpz"), $("#fSpz"), f => { hush(); loadSplat(URL.createObjectURL(f), f.name); });
+pick($("#pickCfg"), $("#fCfg"), async f => {
+  const j = JSON.parse(await f.text());
+  Object.assign(cfg, {
+    position: j.position || cfg.position, rotation: j.rotation || cfg.rotation,
+    offset: j.offset || cfg.offset,
+    scale: Number.isFinite(+j.scale) ? +j.scale : cfg.scale,
+    fov: Number.isFinite(+j.fov) ? +j.fov : cfg.fov,
+    cameraRadius: Number.isFinite(+j.cameraRadius) ? +j.cameraRadius : null,
+  });
+  savedCfg = JSON.parse(JSON.stringify(cfg)); applyCfg(); $("#cfgName").textContent = f.name;
+});
+pick($("#pickRef"), $("#fRef"), f => {
+  refImg.src = URL.createObjectURL(f); $("#refName").textContent = "· " + f.name;
+});
+
+const drop = $("#drop");
+addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("on"); });
+addEventListener("dragleave", e => { if (e.relatedTarget === null) drop.classList.remove("on"); });
+addEventListener("drop", async e => {
+  e.preventDefault(); drop.classList.remove("on");
+  for (const f of e.dataTransfer.files) {
+    if (/\.(spz|ply|splat)$/i.test(f.name)) { hush(); loadSplat(URL.createObjectURL(f), f.name); }
+    else if (/\.json$/i.test(f.name)) $("#pickCfg").onclick, await (async () => {
+      const j = JSON.parse(await f.text());
+      Object.assign(cfg, { position:j.position||cfg.position, rotation:j.rotation||cfg.rotation,
+        offset:j.offset||cfg.offset, scale:Number.isFinite(+j.scale)?+j.scale:cfg.scale,
+        fov:Number.isFinite(+j.fov)?+j.fov:cfg.fov });
+      savedCfg = JSON.parse(JSON.stringify(cfg)); applyCfg(); $("#cfgName").textContent = f.name;
+    })();
+    else if (/^image\//.test(f.type)) { refImg.src = URL.createObjectURL(f); $("#refName").textContent = "· " + f.name; }
+  }
+});
+
+// ── loop ────────────────────────────────────────────────────────────────────
+let last = 0, frames = 0, fps = 0;
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+  frames++;
+  const now = performance.now();
+  if (now - last > 1000) { fps = frames; frames = 0; last = now;
+    if (mesh) $("#info").innerHTML = $("#info").innerHTML.replace(/<br>fps <b>.*?<\/b>/, "") +
+      `<br>fps <b>${fps}</b>`;
+  }
+  if (mode === "diff") drawDiff();
+});
+
+addEventListener("keydown", e => {
+  const map = { "1":"side", "2":"wipe", "3":"blink", "4":"diff" };
+  if (map[e.key]) setMode(map[e.key]);
+  if (e.key.toLowerCase() === "f") autoFit();
+  if (e.key.toLowerCase() === "r") $("#reset").click();
+});
+
+boot();
+</script>
+</body>
+</html>
