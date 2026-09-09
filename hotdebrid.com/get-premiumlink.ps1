@@ -48,7 +48,7 @@ try {
   if (-not $m.Success) { throw 'generate button ref not found' }
   pw @('click', $m.Groups[1].Value) 2>&1 | Out-Null
 
-  $final = ''; $fname = ''
+  $final = ''; $fname = ''; $expectedSize = ''
   while ((Get-Date) -lt $deadline) {
     Start-Sleep 12
     $body = apiLast
@@ -58,6 +58,8 @@ try {
     $tick = ([regex]::Match($body, '"ticket"\s*:\s*"([^"]+)"')).Groups[1].Value
     $nm = ([regex]::Match($body, '"name"\s*:\s*"([^"]+)"')).Groups[1].Value
     if ($nm) { $fname = $nm }
+    $szm = [regex]::Match($body, '"s"\s*:\s*"(\d+)')
+    if ($szm.Success) { $expectedSize = $szm.Groups[1].Value }
     if ($body -match '"directDl"\s*:\s*"1"' -and $link) {
       $final = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($link))
       Write-Output "DIRECT: $final"
@@ -71,20 +73,38 @@ try {
   }
   if (-not $final) { throw 'no directDl=1 before timeout' }
 
-  Write-Output '[3/5] downloading via Edge...'
-  $before = @{}
-  Get-ChildItem $OutDir -File -ErrorAction SilentlyContinue | ForEach-Object { $before[$_.Name] = 1 }
-  pweval "location.href='$final';" | Out-Null
-  $got = ''
-  while ((Get-Date) -lt $deadline) {
-    Start-Sleep 15
-    $new = Get-ChildItem $OutDir -File -ErrorAction SilentlyContinue | Where-Object { -not $before.ContainsKey($_.Name) } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($new -and $new.Extension -ne '.crdownload') { $got = $new.FullName; break }
-    $dl = Get-ChildItem $OutDir -Filter '*.crdownload' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($dl) { Write-Output ("... {0:N0} MB" -f ($dl.Length / 1MB)) }
+  Write-Output '[3/5] downloading with session cookies (single connection)...'
+  if ([string]::IsNullOrWhiteSpace($fname)) { throw 'maze never returned a filename; refusing to guess' }
+  $ProgressPreference = 'SilentlyContinue'
+  $dest = Join-Path $OutDir $fname
+  # playwright-cli routes in-page downloads to Temp\playwright-artifacts-* (GUID name,
+  # wiped on close-all) instead of the pinned dir, and OutDir polling false-positives
+  # on unrelated new files. so: fetch the single-use /dl with the live session
+  # cookies directly (same IP + session, one connection, no ranges).
+  $cj = pw @('cookie-list') | Out-String
+  $pairs = @()
+  foreach ($line in ($cj -split "`r?`n")) {
+    $m = [regex]::Match($line, '^\s*([^=\s]+)=(\S+?)\s+\(domain:\s*([^,]+),')
+    if (-not $m.Success) { continue }
+    $dom = $m.Groups[3].Value.Trim()
+    if ($dom -match 'hotdebrid\.com|premiumlinkgen\.com') { $pairs += ($m.Groups[1].Value + '=' + $m.Groups[2].Value) }
   }
-  if (-not $got) { throw 'download incomplete; URL was: ' + $final }
-  Write-Output "[4/5] DONE: $got"
-  $got
+  if (-not $pairs) { throw 'no hotdebrid session cookies found; refusing blind download' }
+  $headers = @{
+    'Cookie'     = ($pairs -join '; ')
+    'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0'
+    'Referer'    = 'https://www.hotdebrid.com/premium-link-generator/rapidgator'
+  }
+  Invoke-WebRequest -Uri $final -Headers $headers -MaximumRedirection 10 -OutFile $dest
+  $got = Get-Item $dest
+  if ($expectedSize) {
+    Write-Output "size: got $($got.Length), expected $expectedSize"
+    if ($got.Length -ne [long]$expectedSize) { throw ("size mismatch: got {0}, expected {1}" -f $got.Length, $expectedSize) }
+  }
+  $magic = [IO.File]::ReadAllBytes($got.FullName)[0..3]
+  $hex = ($magic | ForEach-Object { $_.ToString('X2') }) -join ' '
+  if (-not (($magic[0] -eq 0x52) -and ($magic[1] -eq 0x61) -and ($magic[2] -eq 0x72) -and ($magic[3] -eq 0x21))) { throw "not a rar (magic $hex); kept at $($got.FullName)" }
+  Write-Output "[4/5] DONE: $($got.FullName)"
+  $got.FullName
 }
 finally { pw @('close-all') | Out-Null }
