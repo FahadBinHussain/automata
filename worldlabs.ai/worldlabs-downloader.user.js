@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.4
+// @version      4.5
 // @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
@@ -226,6 +226,27 @@
 
   function sanitizeFilename(s) { return String(s).replace(/[^a-z0-9_\-]+/gi, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "world"; }
 
+  // Flat view-config stub for imgvault scene upload. The raw world API object
+  // has NO camera fields, so uploading it as the config silently does nothing
+  // in the viewer — the stub (minimap_metadata as position) is the file to
+  // upload and tweak. Mirrors worldlabs-downloader.mjs --marble behavior.
+  function buildViewStub(world) {
+    let mmPos = null;
+    try {
+      const mm = world?.generation_output?.minimap_metadata ?? world?.minimap_metadata;
+      const arr = typeof mm === "string" ? JSON.parse(mm) : mm;
+      if (Array.isArray(arr) && arr.length === 3 && arr.every((n) => Number.isFinite(n))) mmPos = arr;
+    } catch {}
+    return {
+      position: mmPos || [0, 0, 8],
+      rotation: [Math.PI, 0, 0],
+      offset: [0, 0, 0],
+      cameraRadius: mmPos ? Math.round(Math.hypot(...mmPos) * 10) / 10 : 8,
+      radius: null,
+      duration: null,
+    };
+  }
+
   const seenWorldIds = new Set();
   function addJsonAndThumbForWorld(world, displayHint) {
     const worldId = world?.id || world?.world_id || world?.generation_output?.world_id || world?.generation_output?.id || null;
@@ -236,14 +257,22 @@
     // only bundle per-world if we have an identifiable world id — prevents
     // nested spz blobs creating extra world.json / input.png duplicates
     if (!worldId) return;
-    // 1) json — one per worldId
+    // 1) raw world API dump — reference only, NEVER an upload config
+    //    (it has no camera fields; uploading it silently does nothing)
+    const safeBase = sanitizeFilename(displayName) || baseName;
+    const dumpUrl = `worldjson://${baseName}`;
+    if (!capturedUrls.has(dumpUrl)) {
+      capturedUrls.set(dumpUrl, { name: `${safeBase}.world.json`, resolution: "worldjson", isJson: true, jsonData: JSON.stringify(world, null, 2), worldId });
+      log("  + world dump ->", `${safeBase}.world.json`, "(reference only)");
+    }
+    // 2) flat view-config stub — upload THIS as the scene config file
     const jsonUrl = `json://${baseName}`;
     if (!capturedUrls.has(jsonUrl)) {
-      const payload = JSON.stringify(world, null, 2);
-      capturedUrls.set(jsonUrl, { name: `${sanitizeFilename(displayName) || baseName}.json`, resolution: "json", isJson: true, jsonData: payload, worldId });
-      log("  + json ->", `${sanitizeFilename(displayName)}.json`);
+      const stub = buildViewStub(world);
+      capturedUrls.set(jsonUrl, { name: `${safeBase}.json`, resolution: "json", isJson: true, jsonData: JSON.stringify(stub, null, 2), worldId });
+      log("  + config stub ->", `${safeBase}.json`, "(upload this)");
     }
-    // 2) webp thumbnail — prefer rendered thumbnail, NOT cond_image_url
+    // 3) webp thumbnail — prefer rendered thumbnail, NOT cond_image_url
     //    cond_image is the input prompt image (95ac6d68_image_prompt_sanitized.png) — keep as secondary only if no thumb
     let thumbUrl = world?.generation_output?.thumbnail_url || world?.thumbnail_url || null;
     if (!thumbUrl) {
