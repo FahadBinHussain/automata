@@ -1,0 +1,277 @@
+<!doctype html>
+<!--
+  worldlabs single-scene viewer  (automata/worldlabs.ai/compare/view.html)
+
+  purpose : render ONE downloaded .spz with its .json config — no compare panes.
+            1:1 port of worldlabs' OFFICIAL published viewer
+            (https://marble.worldlabs.ai/viewer.html, scraped 2026-09-09):
+            fov 75 · splat at origin, quaternion (1,0,0,0) [= rotX 180°],
+            scale 1 · SparkControls fly-style (drag look, WASD/arrows move,
+            wheel dolly) · no lights, no tone mapping, black background.
+            json fields compose on top (rotation multiplies the flip,
+            cameraRadius sets spawn distance, default 5 like the world page).
+
+  serve   : node serve.mjs   (root defaults to %USERPROFILE%\Downloads)
+            then open http://127.0.0.1:8123/automata/worldlabs.ai/compare/view.html
+
+  params  : ?spz=/<file>.spz  ?config=/<file>.json  (defaults = Heavenly bundle)
+            or drag-drop a .spz / .json onto the page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>scene viewer — worldlabs</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:#000;color:#e8e8ee;overflow:hidden;
+       font:13px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  #host{position:fixed;inset:0}
+  #host canvas{display:block;width:100%;height:100%}
+  #bar{position:fixed;top:12px;left:12px;z-index:10;display:flex;gap:8px;align-items:center;
+       background:rgba(20,20,24,.85);border:1px solid #2a2a31;border-radius:9px;padding:7px 12px}
+  #bar button{background:#1e1e25;border:1px solid #2a2a31;border-radius:7px;
+       padding:5px 10px;cursor:pointer;color:#e8e8ee}
+  #bar button:hover{border-color:#3d3d47;background:#25252e}
+  #bar a{color:#5b9dff;text-decoration:none}
+  #bar .hint{color:#8b8b98;font-size:12px}
+  #info{position:fixed;left:12px;bottom:12px;z-index:10;background:rgba(0,0,0,.65);
+        border:1px solid #2a2a31;border-radius:7px;padding:6px 10px;
+        color:#8b8b98;font-variant-numeric:tabular-nums}
+  #info b{color:#e8e8ee;font-weight:600}
+  #veil{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+        background:rgba(6,6,9,.82);text-align:center;padding:24px}
+  #veil .card{background:#141418;border:1px solid #2a2a31;border-radius:12px;padding:20px 24px;max-width:560px}
+  #veil.err .card{border-color:#ff5c6c}
+  #veil h2{margin:0 0 8px;font-size:16px}
+  #veil p{margin:6px 0;color:#8b8b98}
+  #veil code{background:#0e0e12;padding:1px 5px;border-radius:4px;color:#e8e8ee}
+  #drop{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+        background:rgba(91,157,255,.14);border:3px dashed #5b9dff;font-size:18px;font-weight:600}
+  #drop.on{display:flex}
+  .hide{display:none !important}
+</style>
+</head>
+<body>
+<div id="host"></div>
+<div id="bar">
+  <span id="name">—</span>
+  <button id="reset">reset view (r)</button>
+  <span class="hint">drag look · WASD fly · wheel dolly</span>
+  <a id="orig" href="#" target="_blank" rel="noreferrer">original ↗</a>
+</div>
+<div id="info">loading…</div>
+<div id="dbg" style="position:fixed;left:12px;bottom:64px;z-index:10;background:rgba(0,0,0,.65);border:1px solid #2a2a31;border-radius:7px;padding:6px 10px;color:#8b8b98;font-variant-numeric:tabular-nums">dbg: —</div>
+<div id="veil"><div class="card"><h2 id="vTitle">loading scene…</h2><p id="vBody">fetching splat + config</p></div></div>
+<div id="drop">drop .spz / .json</div>
+<script>
+// loud failure surface: if the module below dies (CDN block, WebGL off, JS error),
+// show it on the veil instead of hanging on "loading…" forever.
+addEventListener("error", (e) => {
+  const v = document.querySelector("#veil"), t = document.querySelector("#vTitle"), b = document.querySelector("#vBody");
+  if (!v || v.classList.contains("hide")) return; // loaded fine — ignore late errors
+  v.classList.remove("hide"); v.classList.add("err");
+  if (t) t.textContent = "viewer failed — " + (e.message || "script error");
+  if (b) b.innerHTML = "file: " + ((e.filename || "").split("/").pop() || "?") + " line " + (e.lineno || "?") +
+    "<br><br>open DevTools (F12 → Console) and send the red lines.";
+}, true);
+</script>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark":"https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+}}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { SparkControls, SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+
+const q = new URLSearchParams(location.search);
+const SPZ_URL = q.get("spz")    || "/31b40b75-fa05-403c-9bef-def66948e218_ceramic.spz";
+const CFG_URL = q.get("config") || "/Heavenly_Gateway_to_Jannah.json";
+const WORLD   = q.get("world")  || "31b40b75-fa05-403c-9bef-def66948e218";
+
+const $ = (s) => document.querySelector(s);
+const veil = $("#veil");
+const say = (t, b, isErr) => {
+  veil.classList.toggle("err", !!isErr);
+  $("#vTitle").textContent = t; $("#vBody").innerHTML = b || "";
+  veil.classList.remove("hide");
+};
+const hush = () => veil.classList.add("hide");
+
+const cfg = {
+  position: [0,0,0], rotation: [0,0,0], offset: [0,0,0],
+  scale: 1, fov: 75, cameraRadius: null,
+};
+let savedCfg = JSON.parse(JSON.stringify(cfg));
+
+// ── renderer core: official spec (no lights, no tone mapping, black) ──
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(cfg.fov, innerWidth/innerHeight, 0.01, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.domElement.tabIndex = 0;
+$("#host").appendChild(renderer.domElement);
+
+const spark = new SparkRenderer({ renderer, maxStdDev: Math.sqrt(8) });
+scene.add(spark);
+
+// official interaction: SparkControls fly-style (NOT orbit)
+const controls = new SparkControls({ canvas: renderer.domElement });
+controls.fpsMovement.keycodeMoveMapping = {
+  KeyW: new THREE.Vector3(0, 0, -1),
+  KeyS: new THREE.Vector3(0, 0, 1),
+  KeyA: new THREE.Vector3(-1, 0, 0),
+  KeyD: new THREE.Vector3(1, 0, 0),
+  KeyE: new THREE.Vector3(0, 1, 0),
+  KeyQ: new THREE.Vector3(0, -1, 0),
+  ArrowUp: new THREE.Vector3(0, 0, -1),
+  ArrowDown: new THREE.Vector3(0, 0, 1),
+  ArrowLeft: new THREE.Vector3(-1, 0, 0),
+  ArrowRight: new THREE.Vector3(1, 0, 0),
+  PageUp: new THREE.Vector3(0, 1, 0),
+  PageDown: new THREE.Vector3(0, -1, 0),
+};
+controls.fpsMovement.keycodeRotateMapping = {
+  Home: new THREE.Vector3(0, -1, 0),
+  End: new THREE.Vector3(0, 1, 0),
+  Insert: new THREE.Vector3(-1, 0, 0),
+  Delete: new THREE.Vector3(1, 0, 0),
+};
+renderer.domElement.addEventListener("focus", () => { controls.fpsMovement.enabled = true; });
+renderer.domElement.addEventListener("blur", () => { controls.fpsMovement.enabled = false; });
+renderer.domElement.addEventListener("pointerdown", () => { renderer.domElement.focus(); });
+document.addEventListener("keydown", (event) => {
+  const moveKey = event.code in controls.fpsMovement.keycodeMoveMapping;
+  const rotateKey = event.code in controls.fpsMovement.keycodeRotateMapping;
+  if (controls.fpsMovement.enabled && (moveKey || rotateKey)) event.preventDefault();
+  if (event.key === "r") $("#reset").click();
+});
+
+const root = new THREE.Group();
+const inner = new THREE.Group();
+root.add(inner); scene.add(root);
+let mesh = null;
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// spawn: world-page default (0,0,N), looking at origin
+function spawn() {
+  const N = cfg.cameraRadius || 5;
+  camera.position.set(0, 0, N);
+  camera.lookAt(0, 0, 0);
+}
+
+function applyCfg() {
+  root.position.set(...cfg.position);
+  root.rotation.set(...cfg.rotation);
+  root.scale.setScalar(cfg.scale);
+  inner.position.set(...cfg.offset);
+  if (camera.fov !== cfg.fov) camera.fov = cfg.fov;
+  camera.updateProjectionMatrix();
+  if (mesh) {
+    // official flip (rotX 180°) composed with the json euler — zeros = official
+    mesh.quaternion.set(1, 0, 0, 0).normalize()
+      .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(...cfg.rotation)));
+  }
+  spawn();
+}
+
+function readCfg(j) {
+  Object.assign(cfg, {
+    position: j.position || [0,0,0],
+    rotation: j.rotation || [0,0,0],
+    offset:   j.offset   || [0,0,0],
+    scale:    Number.isFinite(+j.scale) ? +j.scale : 1,
+    fov:      Number.isFinite(+j.fov)   ? +j.fov   : 75,
+    cameraRadius: Number.isFinite(+j.cameraRadius) ? +j.cameraRadius
+      : Number.isFinite(+j.controls?.camera_radius) ? +j.controls.camera_radius
+      : Number.isFinite(+j.camera?.position?.[2]) ? +j.camera.position[2] : null,
+  });
+  savedCfg = JSON.parse(JSON.stringify(cfg));
+}
+
+function loadSplat(src, label) {
+  if (mesh) { inner.remove(mesh); mesh = null; }
+  say("loading scene…", "fetching " + (label || src));
+  const t0 = performance.now();
+  mesh = new SplatMesh({ url: src, onLoad: () => {
+    const ms = Math.round(performance.now() - t0);
+    inner.add(mesh);
+    applyCfg();
+    hush();
+    $("#info").innerHTML =
+      `splats <b>${(mesh.numSplats ?? 0).toLocaleString()}</b> · load <b>${ms} ms</b><br>` +
+      `fov <b>${cfg.fov}</b> · scale <b>${cfg.scale}</b> · spawn <b>${cfg.cameraRadius ?? 5}</b>`;
+    $("#name").textContent = label || String(src).split("/").pop();
+  }});
+  setTimeout(() => {
+    if (mesh && !mesh.numSplats && !veil.classList.contains("hide")) return;
+    if (mesh && !mesh.numSplats)
+      say("splat produced 0 splats", "the file loaded but decoded empty — check the .spz", true);
+  }, 8000);
+}
+
+async function boot() {
+  if (location.protocol === "file:") {
+    say("open this over http, not file://",
+      "run <code>node serve.mjs</code> in this folder, then open " +
+      "<code>http://127.0.0.1:8123/automata/worldlabs.ai/compare/view.html</code><br><br>" +
+      "(or drop a .spz + .json onto this page right now)", false);
+    return;
+  }
+  $("#orig").href = `https://marble.worldlabs.ai/world/${WORLD}`;
+  try {
+    const res = await fetch(CFG_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    readCfg(await res.json());
+  } catch (e) {
+    say("config not loaded", `${String(CFG_URL).split("/").pop()}: ${e.message} — using built-in defaults`, true);
+    setTimeout(hush, 2500);
+  }
+  loadSplat(SPZ_URL);
+}
+
+$("#reset").onclick = () => { Object.assign(cfg, JSON.parse(JSON.stringify(savedCfg))); applyCfg(); };
+
+// drag-drop: .spz/.ply replaces scene, .json replaces config live
+addEventListener("dragover", (e) => { e.preventDefault(); $("#drop").classList.add("on"); });
+addEventListener("dragleave", () => $("#drop").classList.remove("on"));
+addEventListener("drop", async (e) => {
+  e.preventDefault(); $("#drop").classList.remove("on");
+  for (const f of e.dataTransfer.files) {
+    if (/\.spz$|\.ply$/i.test(f.name)) loadSplat(URL.createObjectURL(f), f.name);
+    else if (/\.json$/i.test(f.name)) {
+      try { readCfg(JSON.parse(await f.text())); applyCfg(); hush(); }
+      catch { say("bad json", f.name + " is not valid JSON", true); }
+    }
+  }
+});
+
+renderer.setAnimationLoop(() => { controls.update(camera); renderer.render(scene, camera); });
+
+// live debug: pointer events + camera numbers (SparkControls has no target)
+window.__vdbg = { down:0, move:0, up:0, wheel:0 };
+for (const [ev, k] of [["pointerdown","down"],["pointermove","move"],["pointerup","up"],["wheel","wheel"]])
+  renderer.domElement.addEventListener(ev, () => { window.__vdbg[k]++; }, { passive:true });
+setInterval(() => {
+  const p = camera.position, qt = camera.quaternion, d = window.__vdbg;
+  const el = $("#dbg");
+  if (el) el.textContent = `dbg: ptr d${d.down}/m${d.move}/u${d.up}/w${d.wheel} · cam ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`;
+  if (![p.x, p.y, p.z, qt.x, qt.y, qt.z, qt.w].every(Number.isFinite))
+    say("camera went NaN — controls dead", "config in force: " + JSON.stringify(cfg), true);
+}, 500);
+
+boot();
+</script>
+</body>
+</html>

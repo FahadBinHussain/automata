@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marble Viewer</title>
+    <style>
+    body {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      border: 0;
+    }
+
+    .viewer-controls {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 10;
+      display: flex;
+      gap: 8px;
+    }
+
+    .viewer-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      font-size: 18px;
+      line-height: 1;
+      color: #fff;
+      cursor: pointer;
+      background: rgba(20, 20, 20, 0.72);
+      border: 0;
+      border-radius: 999px;
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+    }
+
+    .viewer-button:hover {
+      background: rgba(20, 20, 20, 0.88);
+    }
+
+    .viewer-button svg {
+      display: block;
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+
+    .viewer-loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+    }
+
+    .viewer-loading[hidden] {
+      display: none;
+    }
+
+    .viewer-loading-logo {
+      display: block;
+      width: 64px;
+      height: 64px;
+      fill: currentColor;
+      transform-origin: 50% 50%;
+    }
+
+    .viewer-loading-progress {
+      font-family:
+        ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      text-align: center;
+      letter-spacing: 0.03em;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    }
+    </style>
+  </head>
+
+  <body>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
+        "@sparkjsdev/spark": "./export-templates/spark.module.min.js"
+      }
+    }
+    </script>
+    <canvas id="canvas" tabindex="0"></canvas>
+    <div class="viewer-controls">
+      <button
+        id="reset-origin"
+        class="viewer-button"
+        type="button"
+        title="Reset viewpoint"
+      >
+        ⌖
+      </button>
+      <button
+        id="open-marble"
+        class="viewer-button"
+        type="button"
+        title="Open in Marble"
+      >
+        <svg
+          aria-label="World Labs"
+          role="img"
+          viewBox="0 0 60 58"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M6.38248 9.63856L13.0761 42.2245C13.3645 43.627 14.9525 43.9266 15.9145 42.8555L18.8041 39.9643C21.4166 37.3503 25.2909 37.6068 27.672 40.4287L36.7923 49.6416C37.4601 50.3344 38.7237 50.0648 39.1791 49.2203L53.4429 24.1245C54.0842 22.9954 53.1128 21.9374 51.8435 22.2688L28.9166 30.2852C26.7784 31.1821 24.3214 32.1839 21.5418 29.0718L8.90208 8.51691C7.98948 7.34283 6.09599 8.18547 6.38248 9.63856Z"
+          />
+        </svg>
+      </button>
+    </div>
+    <div id="viewer-loading" class="viewer-loading" aria-live="polite">
+      <svg
+        class="viewer-loading-logo"
+        aria-label="World Labs loading"
+        role="img"
+        viewBox="0 0 60 58"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="M6.38248 9.63856L13.0761 42.2245C13.3645 43.627 14.9525 43.9266 15.9145 42.8555L18.8041 39.9643C21.4166 37.3503 25.2909 37.6068 27.672 40.4287L36.7923 49.6416C37.4601 50.3344 38.7237 50.0648 39.1791 49.2203L53.4429 24.1245C54.0842 22.9954 53.1128 21.9374 51.8435 22.2688L28.9166 30.2852C26.7784 31.1821 24.3214 32.1839 21.5418 29.0718L8.90208 8.51691C7.98948 7.34283 6.09599 8.18547 6.38248 9.63856Z"
+        />
+      </svg>
+      <div id="viewer-loading-progress" class="viewer-loading-progress">
+        Loading 0%
+      </div>
+    </div>
+    <script type="module">
+    import {
+      SparkControls,
+      SparkRenderer,
+      SplatMesh,
+      utils,
+    } from "@sparkjsdev/spark";
+    import {
+      PerspectiveCamera,
+      Quaternion,
+      Scene,
+      Vector3,
+      WebGLRenderer,
+    } from "three";
+
+    const RENDER_TIMEOUT_MS = 3 * 1000;
+    const RESET_DURATION_MS = 1 * 1000;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const splatUrl = urlParams.get("splatUrl");
+    const mobileUrl = urlParams.get("mobileUrl");
+    const marbleWorldId = urlParams.get("marbleWorldId");
+
+    const isMobile = utils.isMobile();
+    const url = (isMobile ? mobileUrl : undefined) ?? splatUrl;
+    if (!url) {
+      const div = document.createElement("div");
+      div.innerText =
+        'Specify splats to load by adding "?splatUrl=...[&mobileUrl=...]" to the URL';
+      Object.assign(div.style, {
+        position: "fixed",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        color: "white",
+      });
+      document.body.appendChild(div);
+    }
+
+    const scene = new Scene();
+    const camera = new PerspectiveCamera(
+      75,
+      window.innerWidth / window.innerHeight,
+      0.01,
+      1000
+    );
+    const canvas = document.getElementById("canvas");
+    const resetOriginButton = document.getElementById("reset-origin");
+    const openMarbleButton = document.getElementById("open-marble");
+    const loadingOverlay = document.getElementById("viewer-loading");
+    const loadingLogo = loadingOverlay.querySelector(".viewer-loading-logo");
+    const loadingProgress = document.getElementById("viewer-loading-progress");
+    const renderer = new WebGLRenderer({ canvas });
+    renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+
+    function setLoadingProgress(progress) {
+      const clamped = Math.max(0, Math.min(1, progress));
+      loadingLogo.style.transform = `rotate(${clamped * 1 * 360}deg)`;
+      loadingProgress.textContent = `Loading ${Math.round(clamped * 100)}%`;
+    }
+
+    function onWindowResize() {
+      camera.aspect = canvas.clientWidth / canvas.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+      lastMoved = performance.now();
+    }
+    window.addEventListener("resize", onWindowResize);
+
+    const spark = new SparkRenderer({
+      renderer,
+      maxStdDev: isMobile ? Math.sqrt(5) : Math.sqrt(8),
+    });
+    scene.add(spark);
+
+    const controls = new SparkControls({ canvas });
+    controls.pointerControls.reverseRotate = isMobile;
+    controls.fpsMovement.keycodeMoveMapping = {
+      KeyW: new Vector3(0, 0, -1),
+      KeyS: new Vector3(0, 0, 1),
+      KeyA: new Vector3(-1, 0, 0),
+      KeyD: new Vector3(1, 0, 0),
+      KeyE: new Vector3(0, 1, 0),
+      KeyQ: new Vector3(0, -1, 0),
+      ArrowUp: new Vector3(0, 0, -1),
+      ArrowDown: new Vector3(0, 0, 1),
+      ArrowLeft: new Vector3(-1, 0, 0),
+      ArrowRight: new Vector3(1, 0, 0),
+      PageUp: new Vector3(0, 1, 0),
+      PageDown: new Vector3(0, -1, 0),
+    };
+    controls.fpsMovement.keycodeRotateMapping = {
+      Home: new Vector3(0, -1, 0),
+      End: new Vector3(0, 1, 0),
+      Insert: new Vector3(-1, 0, 0),
+      Delete: new Vector3(1, 0, 0),
+    };
+
+    canvas.addEventListener("focus", () => {
+      controls.fpsMovement.enabled = true;
+    });
+    canvas.addEventListener("blur", () => {
+      controls.fpsMovement.enabled = false;
+    });
+    canvas.addEventListener("pointerdown", () => {
+      canvas.focus();
+    });
+    document.addEventListener("keydown", (event) => {
+      const moveKey = event.code in controls.fpsMovement.keycodeMoveMapping;
+      const rotateKey = event.code in controls.fpsMovement.keycodeRotateMapping;
+      if (controls.fpsMovement.enabled && (moveKey || rotateKey)) {
+        event.preventDefault();
+      }
+    });
+
+    let lastMoved = performance.now();
+    const lastPos = new Vector3();
+    const lastQuat = new Quaternion();
+    const resetStartPos = new Vector3();
+    const resetStartQuat = new Quaternion();
+    const resetTargetPos = new Vector3(0, 0, 0);
+    const resetTargetQuat = new Quaternion(0, 0, 0, 1);
+    let resetStartTime = null;
+
+    resetOriginButton.addEventListener("click", () => {
+      resetStartPos.copy(camera.position);
+      resetStartQuat.copy(camera.quaternion);
+      resetStartTime = performance.now();
+      lastMoved = performance.now();
+    });
+
+    if (marbleWorldId) {
+      openMarbleButton.addEventListener("click", () => {
+        const url = new URL(`/world/${marbleWorldId}`, window.location.origin);
+        window.open(url, "_blank");
+      });
+    } else {
+      openMarbleButton.style.display = "none";
+    }
+
+    renderer.setAnimationLoop(() => {
+      if (resetStartTime === null) {
+        controls.update(camera);
+      } else {
+        const t = Math.min(
+          1,
+          (performance.now() - resetStartTime) / RESET_DURATION_MS
+        );
+        const smoothT = t * t * (3 - 2 * t);
+        camera.position.lerpVectors(resetStartPos, resetTargetPos, smoothT);
+        camera.quaternion.slerpQuaternions(
+          resetStartQuat,
+          resetTargetQuat,
+          smoothT
+        );
+        if (t === 1) {
+          resetStartTime = null;
+        }
+      }
+
+      if (
+        camera.position.distanceTo(lastPos) > 0.001 ||
+        camera.quaternion.dot(lastQuat) < 0.9999
+      ) {
+        lastMoved = performance.now();
+        lastPos.copy(camera.position);
+        lastQuat.copy(camera.quaternion);
+      }
+
+      if (performance.now() - lastMoved < RENDER_TIMEOUT_MS) {
+        renderer.render(scene, camera);
+      }
+    });
+
+    if (url) {
+      setLoadingProgress(0);
+      const splats = new SplatMesh({
+        url,
+        onProgress: (progress) => {
+          setLoadingProgress(progress.loaded / progress.total);
+        },
+      });
+      splats.position.set(0, 0, 0);
+      splats.quaternion.set(1, 0, 0, 0).normalize();
+      splats.scale.setScalar(1);
+      scene.add(splats);
+      await splats.initialized;
+      setLoadingProgress(1);
+      loadingOverlay.hidden = true;
+      lastMoved = performance.now();
+    } else {
+      loadingOverlay.hidden = true;
+    }
+    </script>
+  </body>
+</html>
