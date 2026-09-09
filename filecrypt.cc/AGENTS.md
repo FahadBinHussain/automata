@@ -2,6 +2,33 @@
 
 > **2026-09-08 update:** headless `solve-container.ps1` is still BLOCKED (TLS/telemetry). **new:** `init-fast-pow.js` + `unlock-container.ps1` give a **browser-based fast bypass** that keeps real TLS/cookies/signals but solves the PoW 10-20× faster. `09844C4F93` went `working → gone` in **~2m** (vs 10m native) and unlocked (`hasCNL true`, `ddownload 0/1`). `F011B92635` similarly 3m → 5s. `D27EF9C3B2` still flakes at `90% → idle` (challenge expiry) — retry works.
 
+> **2026-09-09 update — the browser flow had a hidden dependency: FOREGROUND.** the PoW
+> reached `data-state=done` and then silently reset to `idle` with **every `pow_*` field
+> empty** (`pow_id`, `pow_nonce`, `pow_elapsed`, `pow_pauses`, `pow_data`, `pow_x` all `""`).
+> no error, no message — the page just sits on "Security Check" forever. cause: the tab was
+> backgrounded so the worker got throttled. the same container took **12s / 81s / 190s**
+> across three runs, and the slow ones were the ones that failed to unlock.
+> `unlock-container.ps1` covered this with `SetForegroundWindow`; over CDP the equivalent is
+> **`Page.bringToFront`** — call it before the click and ~every 30s after (NOT more:
+> spamming causes blur → pause). with it, `B6B1F4A7B2` solved in **36s** and unlocked
+> first try. **if a container reaches `done` and does not advance, check foregrounding first.**
+>
+> two environment gotchas found the same day:
+> - **PowerShell is not always available** (sandbox dll missing → `unlock-container.ps1`
+>   cannot run at all). don't assume it is there.
+> - `agent-browser eval` **never returns** in an agent shell (global rule 47), so a
+>   click-then-poll loop cannot be written against the CLI. `agent-browser get cdp-url`
+>   + a single CDP attach works. run it in ONE shell command — backgrounded processes
+>   are killed when the tool call ends.
+>
+> requests the browser extension blocks here (`net::ERR_BLOCKED_BY_CLIENT`), noted because
+> they look alarming but `m.js`/`s.js`/`pow_captcha.js` still load 200 and the unlock works:
+> `static.cloudflareinsights.com/beacon.min.js`, `static.filecrypt.to/js/aaaaaaaaaaaaaaaa.js`,
+> `filecrypt.cc/surething.php` (image). do not chase these as the cause of a failed unlock.
+>
+> verified working end-to-end 2026-09-09: `B6B1F4A7B2` → `0/1 Online`, 1.73 GB,
+> LIMSCAPE.THE.LIMINAL.SPACE.EXPLORER-TENOKE on 1fichier, CNL decrypted fine.
+
 ## what filecrypt's gate is (verified 2026-09-08, v2026-02 builds)
 
 the "I am a human" box is a SHA-1 **proof-of-work** captcha, not an image captcha:
@@ -44,7 +71,8 @@ the "I am a human" box is a SHA-1 **proof-of-work** captcha, not an image captch
 - `solve-container.ps1` - **BLOCKED** headless flow — LOUDLY throws "submit rejected". kept for reference only.
 - `run-signals-builder.cjs` - headless signal builder for the blocked flow.
 - `init-fast-pow.js` - **ACTIVE** browser patch — tight-loop Worker + y-fetch mock. use via `agent-browser open --init-script <path> <Container URL>` then JS click `document.querySelector('#pow-captcha .pow-captcha__box').click()` + `SetForegroundWindow` once, poll `data-state` until `gone` (not `idle`). see `unlock-container.ps1`.
-- `unlock-container.ps1` - wrapper around the init script: `.\unlock-container.ps1 -Url https://filecrypt.cc/Container/XXXX.html` → prints `0/1` or `1/1` and CNL links (AES decrypt). handles foreground + polling.
+- `unlock-container.ps1` - wrapper around the init script: `.\unlock-container.ps1 -Url https://filecrypt.cc/Container/XXXX.html` → prints `0/1` or `1/1` and CNL links (AES decrypt). handles foreground + polling. **needs working PowerShell** — not always available.
+- `cdp-unlock.mjs` - **preferred when PowerShell is unavailable / driving from an agent shell.** one CDP attach does `Page.bringToFront` + click + poll + CNL decrypt and prints the real host links. usage in its header comments; needs `agent-browser get cdp-url`.
 
 ## what other tools do (checked 2026-09-08, shipped binaries decompiled + live-run tested)
 
