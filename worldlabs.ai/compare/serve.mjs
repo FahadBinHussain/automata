@@ -9,7 +9,7 @@
  * usage:   node serve.mjs
  *          node serve.mjs --root "C:\Users\<user>\Downloads" --port 8123
  *
- * then:    http://127.0.0.1:8123/automata/worldlabs.ai/compare/index.html
+ * then:    http://127.0.0.1:8123/automata/worldlabs.ai/compare/view.html
  *
  * default root = %USERPROFILE%\Downloads (the folder the downloader saves to)
  *
@@ -53,7 +53,7 @@ const MIME = {
   ".glb":  "model/gltf-binary",
 };
 
-const VIEWER = "/automata/worldlabs.ai/compare/index.html";
+const VIEWER = "/automata/worldlabs.ai/compare/view.html";
 
 createServer(async (req, res) => {
   let urlPath = decodeURIComponent(req.url.split("?")[0].split("#")[0]);
