@@ -13,9 +13,12 @@
 - no GET/GRAB buttons render headless (O() needs `#tr`); drive manually:
   `b1(link,'_self','box_03',ticket)` -> `box_04` -> `{directDl:"1",link:<b64 /dl>,s:<bytes>,name}`.
 - `/dl?id=` is single-use + IP/session-locked (consumed -> `dl?cod=10`; HEAD -> 404).
-  download it in the SAME browser profile (cookies) single-connection. Edge via
-  playwright temp profile loses the file — use `--persistent --profile` with pinned
-  `Default/Preferences` download dir. IDM multi-connection on session URL = 1.8GB junk.
+  download it in the SAME browser profile (cookies) single-connection. playwright-cli
+  routes in-page downloads to `Temp\playwright-artifacts-*` (GUID name, wiped on
+  close-all) even with `--persistent --profile` + pinned download dir — so
+  get-premiumlink.ps1 fetches /dl via Invoke-WebRequest with the live session
+  cookies instead (same IP + session, one connection, no ranges). IDM
+  multi-connection on session URL = 1.8GB junk.
 - quota: `{"error_code":4,"left":"3","sufix":"hours"}` after repeated generates (~3h cooldown).
 - JS is obfuscator.io + RC4 (`bW`/`ea`/`d5` aliases, rotation IIFE). decode harness pattern:
   stub document/window/navigator via Proxy, indirect `(0,eval)` whole file, call decoder
@@ -41,3 +44,18 @@
 - ouo.io -> cuttty.com -> cuttty "I am not a robot" stays disabled (dead end, needs account).
 - leechpremium.link = CF Turnstile (no curl). premiumlink.site = parked (parklogic). okdebrid
   form = same hotdebrid maze. downloader.now/rapidgator returns 200 but JS-redirects to hotdebrid.
+
+## free-generator downloads are SIZED-CORRECT DECOYS (verified 2026-09-09, do not trust arrival)
+- rapidgator `.../LIMSCAPIMINAL.SPACE.EXPLORER-TENOKE.rar.html` generated twice (2 fresh
+  tickets, same IP, no quota hit). both fetches returned exactly 1857573355 bytes.
+- content differs per fetch, entropy ~7.82, no rar/zip/7z/iso magic in first 10MB,
+  no TENOKE/.nfo strings, 7z rejects. unusable junk, not an archive.
+- run 1 = in-browser Edge download, run 2 = single-connection Invoke-WebRequest with
+  live session cookies. both junk -> not a fetch-method artifact.
+- the old "proven" claim meant bytes-arrived, never content-verified. get-premiumlink.ps1
+  now enforces directDl `"s"` size + `Rar!` magic and throws LOUD on mismatch. never
+  mark DONE on arrival alone, and never accept any-new-file-in-OutDir (a stray
+  6KB json once false-triggered DONE and the close-all cleanup wiped the real file).
+- unknown scope: hotdebrid-free always junk vs rapidgator-only vs this-file-only.
+  do NOT burn quota re-proving it — switch path (rapidgator free + proton rotation,
+  or other sources).
