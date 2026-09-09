@@ -11,6 +11,9 @@
  *   node worldlabs-downloader.mjs --serve             # download + start local server
  *   node worldlabs-downloader.mjs --serve --port 9000 # custom port
  *   node worldlabs-downloader.mjs --serve-only        # serve existing ./worldlabs-assets/
+ *   node worldlabs-downloader.mjs --marble <worldUrl> # download one Marble user world;
+ *   #   also writes <name>.world.json (raw API, reference only) + <name>.json
+ *   #   view-config stub (minimap_metadata as position — tweak before upload)
  *
  * No external dependencies — uses only Node.js built-ins.
  */
@@ -402,6 +405,7 @@ async function scrapeMarble(worldUrl) {
     let condImageUrl = null;
     let mpiBase = null;
     let worldName = "world";
+    let worldApi = null;
 
   page.on("response", async (resp) => {
     const url = resp.url();
@@ -413,6 +417,8 @@ async function scrapeMarble(worldUrl) {
         for (const w of items) {
           const spz = w?.generation_output?.spz_urls || w?.spz_urls;
           if (spz && typeof spz === "object") {
+          // Keep the raw world object for the .world.json dump (reference only).
+          if (!worldApi || (w?.generation_output && !worldApi?.generation_output)) worldApi = w;
           // Only keep the best resolution: full_res > 500k
           const bestKey = spz.full_res ? "full_res" : spz["500k"] ? "500k" : Object.keys(spz)[0];
           if (bestKey && spz[bestKey]) spzUrls.set(bestKey, spz[bestKey]);
@@ -513,6 +519,36 @@ async function scrapeMarble(worldUrl) {
           console.log(`  Downloaded: ${name} (${(buf.length / 1024).toFixed(0)}KB)`);
         }
       } catch (e) { console.log(`  Failed: ${e.message}`); }
+    }
+  }
+
+  // Save the raw world API dump + a flat view-config stub. The dump is
+  // reference only — imgvault upload expects the stub shape
+  // {position, rotation, offset, cameraRadius}, never the .world.json file.
+  if (worldApi) {
+    const slug = worldName.replace(/[<>:"/\\|?*\x00-\x1F]/g, "").trim().replace(/\s+/g, "_") || "world";
+    await writeFile(join(OUT_DIR, `${slug}.world.json`), JSON.stringify(worldApi, null, 2));
+    console.log(`  World API saved: ${slug}.world.json (reference only — NOT an upload config)`);
+    let mmPos = null;
+    try {
+      const mm = worldApi?.generation_output?.minimap_metadata ?? worldApi?.minimap_metadata;
+      const arr = typeof mm === "string" ? JSON.parse(mm) : mm;
+      if (Array.isArray(arr) && arr.length === 3 && arr.every(Number.isFinite)) mmPos = arr;
+    } catch {}
+    const stub = {
+      position: mmPos || [0, 0, 8],
+      rotation: [Math.PI, 0, 0],
+      offset: [0, 0, 0],
+      cameraRadius: mmPos ? Math.round(Math.hypot(...mmPos) * 10) / 10 : 8,
+      radius: null,
+      duration: null,
+    };
+    const stubPath = join(OUT_DIR, `${slug}.json`);
+    if (!existsSync(stubPath)) {
+      await writeFile(stubPath, JSON.stringify(stub, null, 2));
+      console.log(`  Config stub saved: ${slug}.json (tweak position/cameraRadius — upload THIS, not .world.json)`);
+    } else {
+      console.log(`  Config exists, kept: ${stubPath}`);
     }
   }
 
