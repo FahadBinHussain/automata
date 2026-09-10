@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.7
-// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + reliable minimize/maximize
+// @version      4.8
+// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + draggable panel + reliable minimize/maximize
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
 // @match        https://worldlabs.ai/*
@@ -646,15 +646,25 @@
   }
   _uiLog = uiLog;
 
-  // Drag (disabled when minimized — minimized circle uses click-to-restore)
+  // Drag — works in both expanded and minimized (minimized drag uses dragMoved to suppress click-to-restore)
   let dragging = false, dx = 0, dy = 0, dragMoved = false;
-  $("#wl-dl-header").addEventListener("mousedown", (e) => {
-    if (panel.classList.contains("minimized")) return;
+  function startDrag(e) {
     if (e.target.closest("button")) return;
     dragging = true; dragMoved = false;
     const r = panel.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
     panel.style.transition = "none";
+    e.preventDefault();
+  }
+  $("#wl-dl-header").addEventListener("mousedown", startDrag);
+  // when minimized the header fills the 48px circle — same handler covers it,
+  // but also listen on panel directly so dragging the circle edge works
+  panel.addEventListener("mousedown", (e) => {
+    if (!panel.classList.contains("minimized")) return;
+    // minimized: panel itself is the drag handle (header already does, this is fallback)
+    if (e.target.closest("button") && !dragMoved) return; // button drag starts via header; let toggle handle click
+    // if mousedown originated on panel background (not header), still start drag
+    if (e.target === panel) startDrag(e);
   });
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
@@ -664,7 +674,7 @@
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
   document.addEventListener("mouseup", () => {
-    if (dragging) setTimeout(() => dragMoved = false, 50);
+    if (dragging) setTimeout(() => dragMoved = false, 80);
     dragging = false; panel.style.transition = "";
   });
 
