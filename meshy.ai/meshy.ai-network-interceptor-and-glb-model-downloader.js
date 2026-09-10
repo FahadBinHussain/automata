@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Meshy GLB Downloader
 // @namespace    https://github.com/meshy-dl
-// @version      2.1
-// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save
+// @version      2.2
+// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (fix minimize/maximize)
 // @author       fahad
 // @match        *://*.meshy.ai/*
 // @grant        GM_download
@@ -417,11 +417,17 @@
     @keyframes meshPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
     @keyframes meshShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
     @keyframes meshSpin { to { transform: rotate(360deg); } }
-    #meshy-dl-panel{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:rgba(14,16,22,.96);color:#e8eefc;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.55),0 0 0 1px rgba(124,140,255,.12);backdrop-filter:blur(16px);width:390px;max-height:86vh;overflow:hidden;border:1px solid rgba(255,255,255,.06);animation:meshFadeIn .35s cubic-bezier(.16,1,.3,1)}
-    #meshy-dl-panel.minimized{width:54px;height:54px;border-radius:50%;cursor:pointer;overflow:hidden}
+    #meshy-dl-panel{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:rgba(14,16,22,.96);color:#e8eefc;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.55),0 0 0 1px rgba(124,140,255,.12);backdrop-filter:blur(16px);width:390px;max-height:86vh;overflow:hidden;border:1px solid rgba(255,255,255,.06);animation:meshFadeIn .35s cubic-bezier(.16,1,.3,1);transition:width .2s ease,height .2s ease,border-radius .2s ease}
+    #meshy-dl-panel.minimized{width:54px;height:54px;border-radius:50%;cursor:pointer;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.45);animation:meshFadeIn .35s cubic-bezier(.16,1,.3,1), meshBob 2.8s ease-in-out infinite}
+    #meshy-dl-panel.minimized:hover{transform:scale(1.06)}
     #meshy-dl-panel.minimized #meshy-dl-body,#meshy-dl-panel.minimized #meshy-dl-acts{display:none}
-    #meshy-dl-panel.minimized #meshy-dl-header{padding:0;justify-content:center;height:54px;border:none}
-    #meshy-dl-panel.minimized #meshy-dl-toggle{margin:0;width:54px;height:54px;border-radius:50%;font-size:22px;display:flex;align-items:center;justify-content:center;animation:meshPulse 2.2s ease-in-out infinite}
+    #meshy-dl-panel.minimized #meshy-dl-header{padding:0;justify-content:center;align-items:center;height:54px;width:54px;border:none;cursor:pointer;background:transparent}
+    #meshy-dl-panel.minimized #meshy-dl-title{display:none}
+    #meshy-dl-panel.minimized #meshy-dl-clear{display:none}
+    #meshy-dl-panel.minimized .meshy-hdr-btns{width:54px;height:54px;display:flex;align-items:center;justify-content:center;gap:0}
+    #meshy-dl-panel.minimized #meshy-dl-toggle{margin:0;width:54px;height:54px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;animation:meshPulse 2.2s ease-in-out infinite, meshSpin 3s linear infinite;cursor:pointer;background:none;border:none}
+    #meshy-dl-panel.minimized #meshy-dl-toggle:hover{background:rgba(124,140,255,.12);animation-play-state:paused}
+    @keyframes meshBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
     #meshy-dl-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.07);cursor:move;user-select:none;background:linear-gradient(135deg, rgba(124,140,255,.10), rgba(56,189,248,.08))}
     #meshy-dl-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;letter-spacing:.01em}
     #meshy-dl-title .ico{width:20px;height:20px;display:inline-grid;place-items:center;background:linear-gradient(135deg,#7c8cff,#38bdf8);border-radius:6px;font-size:12px;animation:meshPulse 3s ease-in-out infinite}
@@ -512,26 +518,49 @@
     if (dot) { dot.classList.toggle("idle", !live); }
   }
 
-  // Drag
-  let dragging = false, dx = 0, dy = 0;
+  // Drag (disabled when minimized)
+  let dragging = false, dx = 0, dy = 0, dragMoved = false;
   $("#meshy-dl-header").addEventListener("mousedown", (e) => {
+    if (panel.classList.contains("minimized")) return;
     if (e.target.closest("button")) return;
-    dragging = true;
+    dragging = true; dragMoved = false;
     const r = panel.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
     panel.style.transition = "none";
   });
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
+    dragMoved = true;
     panel.style.left = (e.clientX - dx) + "px";
     panel.style.top = (e.clientY - dy) + "px";
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
-  document.addEventListener("mouseup", () => { dragging = false; panel.style.transition = ""; });
+  document.addEventListener("mouseup", () => {
+    if (dragging) setTimeout(() => dragMoved = false, 50);
+    dragging = false; panel.style.transition = "";
+  });
 
-  $("#meshy-dl-toggle").addEventListener("click", () => {
-    const m = panel.classList.toggle("minimized");
-    $("#meshy-dl-toggle").textContent = m ? "◈" : "—";
+  function setMinimized(min) {
+    const isMin = panel.classList.toggle("minimized", min);
+    const btn = $("#meshy-dl-toggle");
+    if (btn) btn.textContent = isMin ? "◈" : "—";
+    log(isMin ? "minimized" : "restored");
+    if (_uiLog) _uiLog(isMin ? "Minimized → click circle to restore" : "Restored");
+    return isMin;
+  }
+  $("#meshy-dl-toggle").addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    setMinimized(!panel.classList.contains("minimized"));
+  });
+  panel.addEventListener("click", (e) => {
+    if (!panel.classList.contains("minimized")) return;
+    if (dragMoved) return;
+    setMinimized(false);
+  });
+  $("#meshy-dl-header").addEventListener("dblclick", (e) => {
+    if (e.target.closest("button")) return;
+    if (panel.classList.contains("minimized")) return;
+    setMinimized(true);
   });
   $("#meshy-dl-clear").addEventListener("click", () => {
     logLines.length = 0;
