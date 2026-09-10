@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.10
+// @version      4.11
 // @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + draggable panel/icon + viewport-clamped expand
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
@@ -39,7 +39,7 @@
     { id: 1, name: "Amphitheater", image: "/textures/splats/amphitheater-prompt-360.webp", url_100k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/amphitheater-100k.spz", url_500k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/amphitheater-500k.spz", position: [0, -2, 10],  rotation: [Math.PI, 0, 0], offset: [0, 0, -2],  cameraRadius: 8,   radius: 400,  duration: null },
     { id: 2, name: "Town",         image: "/textures/splats/town-prompt-360.webp",         url_100k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/town-100k.spz",         url_500k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/town-500k.spz",         position: [-1, 1, 8],   rotation: [Math.PI, 0, 0], offset: [0, 0, -0.5], cameraRadius: 2.5, radius: 1200, duration: 4 },
     { id: 3, name: "Garden",       image: "/textures/splats/garden-prompt-360.webp",       url_100k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/garden-100k.spz",       url_500k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/garden-500k.spz",       position: [0, 0, 6],     rotation: [Math.PI, 0, 0], offset: [0, 0, -2],  cameraRadius: 3,   radius: 250,  duration: 5 },
-    { id: 4, name: "Bath",         image: "/textures/splats/bath-prompt-360.webp",         url_100k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/bath-100k.spz",         url_500k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/bath-500k.spz",         position: [0, 0, 7],     rotation: [Math.PI, 0, 0], offset: [0, 0, -1.5], cameraRadius: 8,   radius: 100,  duration: 5.5 },
+    { id: 4, name: "Bath",         image: "/textures/splats/bath-prompt-360.webp",         url_100k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/bath-100k.spz",         url_500k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/bath-500k.spz",         position: [0, 0, 7],     rotation: [Math.PI, 0, 0], offset: [0, 0, -1.5], radius: 100,  duration: 5.5 },
     { id: 6, name: "Train",        image: "/textures/splats/anime-train-prompt-360.webp",  url_100k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/anime-train-100k.spz",  url_500k: "https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/anime-train-500k.spz",  position: [0, 0, 10],    rotation: [Math.PI, 0, 0], offset: [0, 0, -2],  cameraRadius: 4.5, radius: 400,  duration: null },
   ];
   const HOMEPAGE_EXTRA = [
