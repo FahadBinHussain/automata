@@ -58,5 +58,14 @@
   before the traversal check. `join()` emits backslashes on windows, so
   comparing a forward-slash root string against a joined path 403s every
   single request (silent: all files look "missing").
-- the compare viewer needs http (a `file://` page cannot fetch a 30MB local
+ - the compare viewer needs http (a `file://` page cannot fetch a 30MB local
   .spz), or use its drag-and-drop for one-off files.
+
+## homepage vs marble (learned 2026-09-10)
+
+- **two distinct surfaces**: `www.worldlabs.ai/` (homepage world explorer, `wlt-ai-cdn.art`) vs `marble.worldlabs.ai/world/<id>` (per-world API with `spz_urls`). do NOT use marble API probing on homepage — homepage has no worldId, no `/api/` world fetch; the 6 splats are hardcoded in `app/page-<hash>.js` (`HOMEPAGE_SPLATS` in 4.6).
+- **homepage CDN**: `https://wlt-ai-cdn.art/homepage/2026-09-04/models/splats/<name>-100k.spz` + `-500k.spz` (6 names: Autumn, Amphitheater, Town, Garden, Bath, Train) — static public, no auth. preload links in `<head>` (`<link rel="preload" as="fetch" href="...">`) + spark viewer lazy-loads `500k` after `Click to explore`. script must catch both via `performance` + DOM `link[href]` + HTML regex + `HOMEPAGE_SPLATS` seed.
+- **homepage camera presets**: the js array carries `{position, rotation: [π,0,0], offset, cameraRadius, radius, duration}` — identical shape to our json stub, so per-splat `*.json` can be generated directly from that array. no minimap_metadata indirection like marble.
+- **pruning difference**: marble `pruneToSingleBestSpz()` keeps 1 global best (1 spz per world = 3-file bundle). homepage must keep best **per splat base** (`autumn` vs `town` etc.) — per-base pruning on `file.replace(/[-_](100k|500k).../)`. otherwise Homepage seed of 12 spz collapses to 1.
+- **interception**: homepage fetches are to `wlt-ai-cdn.art`, not `/api/` — `fetch/XHR` FILE hook must watch `.spz|.ply|.glb|wlt-ai-cdn.art` (not just `.spz`), and `@connect wlt-ai-cdn.art` must be listed for GM_xmlhttpRequest.
+- **click to explore hook**: homepage explorer uses a phase machine (`preview` → `preparingEntry` → `entering` → `exploring`) driven by `ENTRY_REQUESTED`. the button text is `Click to explore` — hook via delegated `click` + `MutationObserver(canvas)` and re-scan at +1.5s/+4s/+8s. periodic `captureHomepageScenes()` in the 3s interval keeps the panel filled even if user clicks before script init.
