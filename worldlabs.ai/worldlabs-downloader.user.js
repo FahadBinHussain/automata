@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.6
-// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — now captures homepage splats (wlt-ai-cdn.art) after click to explore
+// @version      4.7
+// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + reliable minimize/maximize
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
 // @match        https://worldlabs.ai/*
@@ -558,19 +558,31 @@
   // ══════════════════════════════════════════════════════════════════════════
 
   GM_addStyle(`
-    #wl-dl-panel{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,sans-serif;font-size:13px;background:rgba(17,17,17,.94);color:#eee;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.5);backdrop-filter:blur(12px);width:380px;max-height:85vh;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
-    #wl-dl-panel.minimized{width:48px;height:48px;border-radius:50%;cursor:pointer;overflow:hidden}
+    #wl-dl-panel{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,sans-serif;font-size:13px;background:rgba(17,17,17,.94);color:#eee;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.5);backdrop-filter:blur(12px);width:380px;max-height:85vh;overflow:hidden;border:1px solid rgba(255,255,255,.08);transition:width .2s ease, height .2s ease, border-radius .2s ease}
+    #wl-dl-panel.minimized{width:48px;height:48px;border-radius:50%;cursor:pointer;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.4);animation:wl-bob 2.8s ease-in-out infinite}
+    #wl-dl-panel.minimized:hover{transform:scale(1.06);box-shadow:0 6px 20px rgba(0,0,0,.5)}
     #wl-dl-panel.minimized #wl-dl-body,#wl-dl-panel.minimized #wl-dl-acts{display:none}
-    #wl-dl-panel.minimized #wl-dl-toggle{margin:0;padding:0;width:48px;height:48px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center}
-    #wl-dl-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.08);cursor:move;user-select:none}
-    #wl-dl-header h3{margin:0;font-size:13px;font-weight:600}
-    .wl-dl-hdr-btns{display:flex;gap:4px}
-    .wl-dl-hdr-btns button{background:none;border:none;color:#888;cursor:pointer;font-size:12px;padding:3px 6px;border-radius:4px}
-    .wl-dl-hdr-btns button:hover{background:rgba(255,255,255,.1);color:#fff}
+    #wl-dl-panel.minimized #wl-dl-header{padding:0;justify-content:center;align-items:center;border:none;height:48px;width:48px;cursor:pointer}
+    #wl-dl-panel.minimized #wl-dl-header h3{display:none}
+    #wl-dl-panel.minimized #wl-dl-clear{display:none}
+    #wl-dl-panel.minimized .wl-dl-hdr-btns{width:48px;height:48px;display:flex;align-items:center;justify-content:center;gap:0}
+    #wl-dl-panel.minimized #wl-dl-toggle{margin:0;padding:0;width:48px;height:48px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center;background:none;border:none;animation:wl-spin 3s linear infinite;cursor:pointer}
+    #wl-dl-panel.minimized #wl-dl-toggle:hover{background:rgba(255,255,255,.08);animation-play-state:paused}
+    @keyframes wl-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+    @keyframes wl-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+    @keyframes wl-pulse{0%,100%{opacity:1}50%{opacity:.85}}
+    #wl-dl-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.08);cursor:move;user-select:none;transition:all .2s}
+    #wl-dl-header h3{margin:0;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
+    #wl-dl-header h3::before{content:"◈";font-size:10px;animation:wl-pulse 1.6s ease-in-out infinite;color:#4ade80}
+    #wl-dl-panel.minimized #wl-dl-header h3::before{display:none}
+    .wl-dl-hdr-btns{display:flex;gap:4px;align-items:center}
+    .wl-dl-hdr-btns button{background:none;border:none;color:#888;cursor:pointer;font-size:12px;padding:3px 6px;border-radius:4px;transition:all .15s}
+    .wl-dl-hdr-btns button:hover{background:rgba(255,255,255,.1);color:#fff;transform:scale(1.05)}
     #wl-dl-body{padding:10px 14px;overflow-y:auto;max-height:55vh}
     #wl-dl-status{font-size:12px;color:#aaa;padding:2px 0 4px}
     #wl-dl-log{font-size:10px;color:#555;max-height:100px;overflow-y:auto;padding:4px 6px;background:rgba(0,0,0,.3);border-radius:4px;margin:4px 0;font-family:monospace;white-space:pre-wrap;word-break:break-all}
-    .wl-dl-sec{margin-bottom:8px}
+    .wl-dl-sec{margin-bottom:8px;animation:wl-fadeIn .25s ease}
+    @keyframes wl-fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
     .wl-dl-sec-t{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#666;margin-bottom:4px;font-weight:600}
     .wl-dl-item{display:flex;align-items:center;padding:4px 8px;margin-bottom:1px;border-radius:4px;transition:background .1s}
     .wl-dl-item:hover{background:rgba(255,255,255,.06)}
@@ -585,9 +597,11 @@
     .wl-dl-item .bd:hover{background:rgba(255,255,255,.15);color:#fff}
     .wl-dl-item .bd.ok{color:#4ade80}
     #wl-dl-acts{display:flex;gap:6px;padding:6px 14px 10px;border-top:1px solid rgba(255,255,255,.08)}
-    #wl-dl-acts button{flex:1;padding:6px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer}
+    #wl-dl-acts button{flex:1;padding:6px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
+    #wl-dl-acts button:hover{transform:translateY(-1px);filter:brightness(1.05)}
+    #wl-dl-acts button:active{transform:translateY(0)}
     #wl-dl-dlall{background:#fff;color:#111}
-    #wl-dl-dlall:disabled{opacity:.4;cursor:not-allowed}
+    #wl-dl-dlall:disabled{opacity:.4;cursor:not-allowed;transform:none}
     #wl-dl-scan{background:rgba(255,255,255,.08);color:#aaa}
     .wl-dl-prog{height:2px;background:rgba(255,255,255,.1);border-radius:1px;margin-top:6px;overflow:hidden}
     .wl-dl-bar{height:100%;background:#4ade80;border-radius:1px;transition:width .3s;width:0%}
@@ -632,26 +646,57 @@
   }
   _uiLog = uiLog;
 
-  // Drag
-  let dragging = false, dx = 0, dy = 0;
+  // Drag (disabled when minimized — minimized circle uses click-to-restore)
+  let dragging = false, dx = 0, dy = 0, dragMoved = false;
   $("#wl-dl-header").addEventListener("mousedown", (e) => {
+    if (panel.classList.contains("minimized")) return;
     if (e.target.closest("button")) return;
-    dragging = true;
+    dragging = true; dragMoved = false;
     const r = panel.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
     panel.style.transition = "none";
   });
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
+    dragMoved = true;
     panel.style.left = (e.clientX - dx) + "px";
     panel.style.top = (e.clientY - dy) + "px";
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
-  document.addEventListener("mouseup", () => { dragging = false; panel.style.transition = ""; });
+  document.addEventListener("mouseup", () => {
+    if (dragging) setTimeout(() => dragMoved = false, 50);
+    dragging = false; panel.style.transition = "";
+  });
 
-  $("#wl-dl-toggle").addEventListener("click", () => {
-    const m = panel.classList.toggle("minimized");
-    $("#wl-dl-toggle").textContent = m ? "3D" : "—";
+  function setMinimized(min) {
+    const isMin = panel.classList.toggle("minimized", min);
+    const btn = $("#wl-dl-toggle");
+    if (btn) btn.textContent = isMin ? "◈" : "—";
+    panel.style.transition = "";
+    log(isMin ? "minimized" : "restored");
+    if (_uiLog) _uiLog(isMin ? "Minimized → click circle to restore" : "Restored");
+    return isMin;
+  }
+
+  $("#wl-dl-toggle").addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const willMin = !panel.classList.contains("minimized");
+    setMinimized(willMin);
+  });
+
+  // clicking the minimized circle anywhere restores (fixes stuck-minimized bug where button was clipped by header padding)
+  panel.addEventListener("click", (e) => {
+    if (!panel.classList.contains("minimized")) return;
+    // ignore if drag just happened
+    if (dragMoved) return;
+    // any click on the circle restores — also handles case where #wl-dl-toggle was not hit due to overflow clipping
+    setMinimized(false);
+  });
+  // also allow header double-click to toggle when expanded
+  $("#wl-dl-header").addEventListener("dblclick", (e) => {
+    if (e.target.closest("button")) return;
+    if (panel.classList.contains("minimized")) return;
+    setMinimized(true);
   });
 
   $("#wl-dl-clear").addEventListener("click", () => {
