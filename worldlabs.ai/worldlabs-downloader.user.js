@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.9
-// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + draggable panel/icon + reliable minimize/maximize
+// @version      4.10
+// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + draggable panel/icon + viewport-clamped expand
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
 // @match        https://worldlabs.ai/*
@@ -670,14 +670,41 @@
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
     dragMoved = true;
-    panel.style.left = (e.clientX - dx) + "px";
-    panel.style.top = (e.clientY - dy) + "px";
+    const pad = 5;
+    let nx = e.clientX - dx, ny = e.clientY - dy;
+    nx = Math.max(pad, Math.min(nx, window.innerWidth - panel.offsetWidth - pad));
+    ny = Math.max(pad, Math.min(ny, window.innerHeight - panel.offsetHeight - pad));
+    panel.style.left = nx + "px";
+    panel.style.top = ny + "px";
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
   document.addEventListener("mouseup", () => {
-    if (dragging) setTimeout(() => dragMoved = false, 100);
+    if (dragging) { clampToViewport(); setTimeout(() => dragMoved = false, 100); }
+    else setTimeout(() => dragMoved = false, 100);
     dragging = false; panel.style.transition = "";
   });
+  window.addEventListener("resize", clampToViewport);
+
+  function clampToViewport() {
+    // keep panel fully inside viewport after expand or drag
+    requestAnimationFrame(() => {
+      const r = panel.getBoundingClientRect();
+      const pad = 10;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      let left = r.left, top = r.top;
+      let changed = false;
+      if (r.right > vw - pad) { left = vw - r.width - pad; changed = true; }
+      if (r.bottom > vh - pad) { top = vh - r.height - pad; changed = true; }
+      if (left < pad) { left = pad; changed = true; }
+      if (top < pad) { top = pad; changed = true; }
+      if (changed) {
+        panel.style.left = left + "px";
+        panel.style.top = top + "px";
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+      }
+    });
+  }
 
   function setMinimized(min) {
     const isMin = panel.classList.toggle("minimized", min);
@@ -686,6 +713,7 @@
     panel.style.transition = "";
     log(isMin ? "minimized" : "restored");
     if (_uiLog) _uiLog(isMin ? "Minimized → click circle to restore" : "Restored");
+    if (!isMin) clampToViewport();
     return isMin;
   }
 

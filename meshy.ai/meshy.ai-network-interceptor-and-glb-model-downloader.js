@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Meshy GLB Downloader
 // @namespace    https://github.com/meshy-dl
-// @version      2.4
-// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (icon drag + fix minimize/maximize)
+// @version      2.5
+// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (viewport-clamped expand)
 // @author       fahad
 // @match        *://*.meshy.ai/*
 // @grant        GM_download
@@ -540,14 +540,40 @@
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
     dragMoved = true;
-    panel.style.left = (e.clientX - dx) + "px";
-    panel.style.top = (e.clientY - dy) + "px";
+    const pad = 5;
+    let nx = e.clientX - dx, ny = e.clientY - dy;
+    nx = Math.max(pad, Math.min(nx, window.innerWidth - panel.offsetWidth - pad));
+    ny = Math.max(pad, Math.min(ny, window.innerHeight - panel.offsetHeight - pad));
+    panel.style.left = nx + "px";
+    panel.style.top = ny + "px";
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
   document.addEventListener("mouseup", () => {
-    if (dragging) setTimeout(() => dragMoved = false, 100);
+    if (dragging) { clampToViewport(); setTimeout(() => dragMoved = false, 100); }
+    else setTimeout(() => dragMoved = false, 100);
     dragging = false; panel.style.transition = "";
   });
+  window.addEventListener("resize", clampToViewport);
+
+  function clampToViewport() {
+    requestAnimationFrame(() => {
+      const r = panel.getBoundingClientRect();
+      const pad = 10;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      let left = r.left, top = r.top;
+      let changed = false;
+      if (r.right > vw - pad) { left = vw - r.width - pad; changed = true; }
+      if (r.bottom > vh - pad) { top = vh - r.height - pad; changed = true; }
+      if (left < pad) { left = pad; changed = true; }
+      if (top < pad) { top = pad; changed = true; }
+      if (changed) {
+        panel.style.left = left + "px";
+        panel.style.top = top + "px";
+        panel.style.right = "auto";
+        panel.style.bottom = "auto";
+      }
+    });
+  }
 
   function setMinimized(min) {
     const isMin = panel.classList.toggle("minimized", min);
@@ -555,6 +581,7 @@
     if (btn) btn.textContent = isMin ? "◈" : "—";
     log(isMin ? "minimized" : "restored");
     if (_uiLog) _uiLog(isMin ? "Minimized → click circle to restore" : "Restored");
+    if (!isMin) clampToViewport();
     return isMin;
   }
   $("#meshy-dl-toggle").addEventListener("click", (e) => {
