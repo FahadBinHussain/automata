@@ -51,7 +51,29 @@ home of reusable qBittorrent scripts (headless add/status via the Web API).
 - **sequential + first/last-piece download** (user rule): user wants BOTH on every torrent. the ini `[Preferences]` keys `SeqDL=true`/`FLPPieces=true` survive qBittorrent's own ini rewrites but are **NOT applied to WebAPI adds** on 5.2.1 (new torrents land with seq_dl=False). `add-torrent.ps1` now ensures both via the toggle endpoints after every successful add (idempotent - only toggles when false).
 - getting magnets: 1337xx.to mirror detail pages work with plain HTTP via `..\1337x.to\get-magnet.ps1` (search on that mirror is a honeypot - never trust it). for movie search use `..\yts.lt\search.ps1`, for games/niche `..\thepiratebay.org\search.ps1` - both have `-Add` to push straight in here.
 
-## proxy + BitTorrent gotchas
+## post-download safety check (scene/game torrents, 2026-09-09 procedure)
+
+repack-site wrappers (IGG/PCGamesTorrents `.url`, promo `.txt`) prove non-scene
+hands touched the upload, so identity AND safety both need checks. nothing
+executes before these pass:
+
+1. stop the torrent, delete wrapper spam — keep only release files + nfo.
+2. AV scan of the folder (`MpCmdRun -Scan -ScanType 3 -File <dir>`). if the
+   Windefend service is stopped and won't start (no admin), say so LOUDLY —
+   do not silently skip; the remaining checks are identity-only, not safety.
+3. mount ISO read-only (`Mount-DiskImage`), inventory all
+   `*.exe,*.bat,*.cmd,*.vbs,*.js,*.ps1,*.msi,*.dll`. standard TENOKE layout =
+   `SETUP.exe` stub + `SETUP.bin` data + `Crack/steam_api64.dll`. any
+   third-party installer/script = stop and report. dismount after.
+4. srrDB file compare: release page lists stored-file sizes + CRCs
+   (e.g. nfo 32,318 bytes CRC E1AA765D). verify with
+   `python -c "import zlib; print('%08X' % (zlib.crc32(open(r'<file>','rb').read()) & 0xffffffff))"`.
+   srrDB sits behind Anubis PoW (headless fetch blocked) — use the
+   agent-browser + CDP navigate-and-dump pattern (see temp `srrdb-check.mjs`
+   approach: Page.navigate, wait, read tables).
+5. verified 2026-09-09: `LIMSCAPE.THE.LIMINAL.SPACE.EXPLORER-TENOKE` nfo CRC
+   matched srrDB exactly; ISO structure standard; AV scan unavailable
+   (service stopped, no admin) — disclosed, not waived.
 
 - **SOCKS5/VPN proxy kills P2P**: if torrents sit in `metaDL`/`stalledDL` at 0 bytes even when trackers report healthy seed counts, and DHT `connection_status` stays `firewalled`, check for `proxy_type=SOCKS5` pointing at a VPN/proxy client (e.g. mihomo under v2rayN in `mode: global`). in global mode ALL BitTorrent traffic (tracker HTTP, UDP DHT, AND peer connections) is forced through free proxy/VPN servers, which throttle/break P2P. the dead giveaway: leechers (all at 0%) connect but **no seeder ever transfers data**.
 - **fix**: set `proxy_type=None` via `POST /api/v2/app/setPreferences` (body `json={"proxy_type":"None"}`). afterwards peer connections go direct and the swarm shows real peers. do NOT re-enable a global-mode SOCKS5 for qBittorrent without a strong reason.
