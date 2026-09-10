@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         World Labs 3D Asset Downloader
 // @namespace    https://github.com/worldlabs-dl
-// @version      4.8
-// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + draggable panel + reliable minimize/maximize
+// @version      4.9
+// @description  Download 3D models, gaussian splats, and textures from worldlabs.ai and marble.worldlabs.ai — homepage splats + draggable panel/icon + reliable minimize/maximize
 // @author       fahad
 // @match        https://www.worldlabs.ai/*
 // @match        https://worldlabs.ai/*
@@ -559,14 +559,17 @@
 
   GM_addStyle(`
     #wl-dl-panel{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,sans-serif;font-size:13px;background:rgba(17,17,17,.94);color:#eee;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.5);backdrop-filter:blur(12px);width:380px;max-height:85vh;overflow:hidden;border:1px solid rgba(255,255,255,.08);transition:width .2s ease, height .2s ease, border-radius .2s ease}
-    #wl-dl-panel.minimized{width:48px;height:48px;border-radius:50%;cursor:pointer;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.4);animation:wl-bob 2.8s ease-in-out infinite}
+    #wl-dl-panel.minimized{width:48px;height:48px;border-radius:50%;cursor:grab;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.4);animation:wl-bob 2.8s ease-in-out infinite}
+    #wl-dl-panel.minimized:active{cursor:grabbing}
     #wl-dl-panel.minimized:hover{transform:scale(1.06);box-shadow:0 6px 20px rgba(0,0,0,.5)}
     #wl-dl-panel.minimized #wl-dl-body,#wl-dl-panel.minimized #wl-dl-acts{display:none}
-    #wl-dl-panel.minimized #wl-dl-header{padding:0;justify-content:center;align-items:center;border:none;height:48px;width:48px;cursor:pointer}
+    #wl-dl-panel.minimized #wl-dl-header{padding:0;justify-content:center;align-items:center;border:none;height:48px;width:48px;cursor:grab}
+    #wl-dl-panel.minimized #wl-dl-header:active{cursor:grabbing}
     #wl-dl-panel.minimized #wl-dl-header h3{display:none}
     #wl-dl-panel.minimized #wl-dl-clear{display:none}
     #wl-dl-panel.minimized .wl-dl-hdr-btns{width:48px;height:48px;display:flex;align-items:center;justify-content:center;gap:0}
-    #wl-dl-panel.minimized #wl-dl-toggle{margin:0;padding:0;width:48px;height:48px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center;background:none;border:none;animation:wl-spin 3s linear infinite;cursor:pointer}
+    #wl-dl-panel.minimized #wl-dl-toggle{margin:0;padding:0;width:48px;height:48px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center;background:none;border:none;animation:wl-spin 3s linear infinite;cursor:grab}
+    #wl-dl-panel.minimized #wl-dl-toggle:active{cursor:grabbing}
     #wl-dl-panel.minimized #wl-dl-toggle:hover{background:rgba(255,255,255,.08);animation-play-state:paused}
     @keyframes wl-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
     @keyframes wl-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
@@ -646,10 +649,11 @@
   }
   _uiLog = uiLog;
 
-  // Drag — works in both expanded and minimized (minimized drag uses dragMoved to suppress click-to-restore)
+  // Drag — expanded: header drag (not buttons). minimized: whole circle + icon drag, click vs drag distinguished via dragMoved
   let dragging = false, dx = 0, dy = 0, dragMoved = false;
   function startDrag(e) {
-    if (e.target.closest("button")) return;
+    const isMin = panel.classList.contains("minimized");
+    if (!isMin && e.target.closest("button")) return; // expanded: buttons are not drag handles
     dragging = true; dragMoved = false;
     const r = panel.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
@@ -657,14 +661,11 @@
     e.preventDefault();
   }
   $("#wl-dl-header").addEventListener("mousedown", startDrag);
-  // when minimized the header fills the 48px circle — same handler covers it,
-  // but also listen on panel directly so dragging the circle edge works
+  // minimized: panel background + icon itself are drag handles (icon was previously blocked)
   panel.addEventListener("mousedown", (e) => {
     if (!panel.classList.contains("minimized")) return;
-    // minimized: panel itself is the drag handle (header already does, this is fallback)
-    if (e.target.closest("button") && !dragMoved) return; // button drag starts via header; let toggle handle click
-    // if mousedown originated on panel background (not header), still start drag
-    if (e.target === panel) startDrag(e);
+    // allow drag from anywhere on the 48px circle, including the ◈ button
+    if (e.target === panel || e.target.closest("button") || e.target.closest("#wl-dl-header")) startDrag(e);
   });
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
@@ -674,7 +675,7 @@
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
   document.addEventListener("mouseup", () => {
-    if (dragging) setTimeout(() => dragMoved = false, 80);
+    if (dragging) setTimeout(() => dragMoved = false, 100);
     dragging = false; panel.style.transition = "";
   });
 
@@ -689,6 +690,7 @@
   }
 
   $("#wl-dl-toggle").addEventListener("click", (e) => {
+    if (dragMoved) { e.preventDefault(); e.stopPropagation(); return; } // icon drag, not a toggle click
     e.preventDefault(); e.stopPropagation();
     const willMin = !panel.classList.contains("minimized");
     setMinimized(willMin);
@@ -697,9 +699,10 @@
   // clicking the minimized circle anywhere restores (fixes stuck-minimized bug where button was clipped by header padding)
   panel.addEventListener("click", (e) => {
     if (!panel.classList.contains("minimized")) return;
-    // ignore if drag just happened
-    if (dragMoved) return;
+    if (dragMoved) return; // drag, not click
     // any click on the circle restores — also handles case where #wl-dl-toggle was not hit due to overflow clipping
+    // ignore button clicks already handled above (they already toggled)
+    if (e.target.closest("#wl-dl-toggle")) return;
     setMinimized(false);
   });
   // also allow header double-click to toggle when expanded

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Meshy GLB Downloader
 // @namespace    https://github.com/meshy-dl
-// @version      2.3
-// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (draggable + fix minimize/maximize)
+// @version      2.4
+// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (icon drag + fix minimize/maximize)
 // @author       fahad
 // @match        *://*.meshy.ai/*
 // @grant        GM_download
@@ -418,14 +418,17 @@
     @keyframes meshShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
     @keyframes meshSpin { to { transform: rotate(360deg); } }
     #meshy-dl-panel{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,-apple-system,sans-serif;font-size:13px;background:rgba(14,16,22,.96);color:#e8eefc;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.55),0 0 0 1px rgba(124,140,255,.12);backdrop-filter:blur(16px);width:390px;max-height:86vh;overflow:hidden;border:1px solid rgba(255,255,255,.06);animation:meshFadeIn .35s cubic-bezier(.16,1,.3,1);transition:width .2s ease,height .2s ease,border-radius .2s ease}
-    #meshy-dl-panel.minimized{width:54px;height:54px;border-radius:50%;cursor:pointer;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.45);animation:meshFadeIn .35s cubic-bezier(.16,1,.3,1), meshBob 2.8s ease-in-out infinite}
+    #meshy-dl-panel.minimized{width:54px;height:54px;border-radius:50%;cursor:grab;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.45);animation:meshFadeIn .35s cubic-bezier(.16,1,.3,1), meshBob 2.8s ease-in-out infinite}
+    #meshy-dl-panel.minimized:active{cursor:grabbing}
     #meshy-dl-panel.minimized:hover{transform:scale(1.06)}
     #meshy-dl-panel.minimized #meshy-dl-body,#meshy-dl-panel.minimized #meshy-dl-acts{display:none}
-    #meshy-dl-panel.minimized #meshy-dl-header{padding:0;justify-content:center;align-items:center;height:54px;width:54px;border:none;cursor:pointer;background:transparent}
+    #meshy-dl-panel.minimized #meshy-dl-header{padding:0;justify-content:center;align-items:center;height:54px;width:54px;border:none;cursor:grab;background:transparent}
+    #meshy-dl-panel.minimized #meshy-dl-header:active{cursor:grabbing}
     #meshy-dl-panel.minimized #meshy-dl-title{display:none}
     #meshy-dl-panel.minimized #meshy-dl-clear{display:none}
     #meshy-dl-panel.minimized .meshy-hdr-btns{width:54px;height:54px;display:flex;align-items:center;justify-content:center;gap:0}
-    #meshy-dl-panel.minimized #meshy-dl-toggle{margin:0;width:54px;height:54px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;animation:meshPulse 2.2s ease-in-out infinite, meshSpin 3s linear infinite;cursor:pointer;background:none;border:none}
+    #meshy-dl-panel.minimized #meshy-dl-toggle{margin:0;width:54px;height:54px;border-radius:50%;font-size:20px;display:flex;align-items:center;justify-content:center;animation:meshPulse 2.2s ease-in-out infinite, meshSpin 3s linear infinite;cursor:grab;background:none;border:none}
+    #meshy-dl-panel.minimized #meshy-dl-toggle:active{cursor:grabbing}
     #meshy-dl-panel.minimized #meshy-dl-toggle:hover{background:rgba(124,140,255,.12);animation-play-state:paused}
     @keyframes meshBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
     #meshy-dl-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.07);cursor:move;user-select:none;background:linear-gradient(135deg, rgba(124,140,255,.10), rgba(56,189,248,.08))}
@@ -518,10 +521,11 @@
     if (dot) { dot.classList.toggle("idle", !live); }
   }
 
-  // Drag — works expanded and minimized (minimized drag suppresses click-to-restore via dragMoved)
+  // Drag — expanded: header drag (not buttons). minimized: whole circle + icon drag, click vs drag distinguished via dragMoved
   let dragging = false, dx = 0, dy = 0, dragMoved = false;
   function startDrag(e) {
-    if (e.target.closest("button")) return;
+    const isMin = panel.classList.contains("minimized");
+    if (!isMin && e.target.closest("button")) return;
     dragging = true; dragMoved = false;
     const r = panel.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
@@ -531,7 +535,7 @@
   $("#meshy-dl-header").addEventListener("mousedown", startDrag);
   panel.addEventListener("mousedown", (e) => {
     if (!panel.classList.contains("minimized")) return;
-    if (e.target === panel) startDrag(e);
+    if (e.target === panel || e.target.closest("button") || e.target.closest("#meshy-dl-header")) startDrag(e);
   });
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
@@ -541,7 +545,7 @@
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
   document.addEventListener("mouseup", () => {
-    if (dragging) setTimeout(() => dragMoved = false, 80);
+    if (dragging) setTimeout(() => dragMoved = false, 100);
     dragging = false; panel.style.transition = "";
   });
 
@@ -554,12 +558,14 @@
     return isMin;
   }
   $("#meshy-dl-toggle").addEventListener("click", (e) => {
+    if (dragMoved) { e.preventDefault(); e.stopPropagation(); return; }
     e.preventDefault(); e.stopPropagation();
     setMinimized(!panel.classList.contains("minimized"));
   });
   panel.addEventListener("click", (e) => {
     if (!panel.classList.contains("minimized")) return;
     if (dragMoved) return;
+    if (e.target.closest("#meshy-dl-toggle")) return; // button already handled
     setMinimized(false);
   });
   $("#meshy-dl-header").addEventListener("dblclick", (e) => {
