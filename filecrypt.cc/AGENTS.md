@@ -1,4 +1,17 @@
-# filecrypt.cc - PoW captcha bypass (STATUS: BROWSER-FAST — headless STILL BLOCKED, browser patch WORKS)
+# filecrypt.cc - PoW captcha bypass (STATUS: NO WORKING BYPASS — DO NOT USE)
+
+> **2026-09-09 verdict: we do NOT have a fast bypass. agents must NOT use
+> the filecrypt route** (same rule as rapidgator.net), unless the download
+> is tiny or the user explicitly overrides.
+> - `init-fast-pow.js` fast Worker did NOT accelerate in practice: FCE74DF1E1
+>   ran at native speed (~40k h/s, diff 24 → ~7 min solves) across 3 attempts.
+> - its pow_y fetch mock returns a FAKE cid → server rejects at final POST →
+>   silent re-gate (submitted, `gone`, but still "Security Check").
+> - slow solves hit the ~480s challenge expiry: `done` with filled pow_*
+>   fields resets to `idle` with every field wiped, no error.
+> - the old F011B92635 "5s unlock" could NOT be reproduced — treat as unverified.
+> - use FMHY-chain sources instead (RLSBB posts, 1337x trusted uploaders,
+>   repacks). filecrypt containers are a dead end until a real bypass exists.
 
 > **2026-09-08 update:** headless `solve-container.ps1` is still BLOCKED (TLS/telemetry). **new:** `init-fast-pow.js` + `unlock-container.ps1` give a **browser-based fast bypass** that keeps real TLS/cookies/signals but solves the PoW 10-20× faster. `09844C4F93` went `working → gone` in **~2m** (vs 10m native) and unlocked (`hasCNL true`, `ddownload 0/1`). `F011B92635` similarly 3m → 5s. `D27EF9C3B2` still flakes at `90% → idle` (challenge expiry) — retry works.
 
