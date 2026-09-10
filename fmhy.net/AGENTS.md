@@ -13,6 +13,25 @@ FMHY category page -> listed index -> listed sub-source -> actual release
 - verify every hop is a documented link on the previous page (fetch the pages, follow the anchors).
 - if any hop is missing (the release/site is NOT listed in the chain), do NOT trust it -> do NOT add/download. tell the user which hop failed instead of silently working around it.
 
+## negative list (check BEFORE adding — 2026-09-09 lesson)
+
+the chain rule above is allowlist-only and that is NOT enough: a source can look
+reachable yet be explicitly flagged. always check these denylists too:
+
+- FMHY `/unsafe` page + "Recently Removed" section.
+- r/PiratedGames Mega "Untrusted sites" + "Untrusted uploaders" sections
+  (`https://rentry.org/pgames`).
+- known-bad (seen 2026-09-09, do NOT use): **The Pirate Bay / TPB**
+  ("Malware Risk", "any user from TPB" untrusted), **IGG Games /
+  PCGamesTorrents / LoadGames / GamesTorrents** (malware, miners),
+  **SteamUnlocked / GOG Unlocked**, scene-group-name sites
+  (CODEX/SKIDROW/RELOADED/... — "SCENE GROUPS DON'T HAVE SITES").
+- repack-site wrapper files (`.url` shortcuts, promo `.txt`) inside an
+  otherwise genuine scene torrent are inert spam — delete before handover —
+  but their presence proves non-scene hands touched the upload, so the bytes
+  themselves still need a post-download safety check (Defender scan + srrDB
+  file-list compare), never a trust assumption.
+
 ## how to use
 
 1. identify the game/category, fetch the matching FMHY page (e.g. `/gaming`, `/audio`, `/video`, `/downloading`, `/reading`).
