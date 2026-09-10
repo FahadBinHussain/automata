@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Meshy GLB Downloader
 // @namespace    https://github.com/meshy-dl
-// @version      2.2
-// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (fix minimize/maximize)
+// @version      2.3
+// @description  Download GLB/FBX/OBJ/STL/MESHY models, previews and textures from meshy.ai — marble-style panel with motion, grouping, and bulk save (draggable + fix minimize/maximize)
 // @author       fahad
 // @match        *://*.meshy.ai/*
 // @grant        GM_download
@@ -518,15 +518,20 @@
     if (dot) { dot.classList.toggle("idle", !live); }
   }
 
-  // Drag (disabled when minimized)
+  // Drag — works expanded and minimized (minimized drag suppresses click-to-restore via dragMoved)
   let dragging = false, dx = 0, dy = 0, dragMoved = false;
-  $("#meshy-dl-header").addEventListener("mousedown", (e) => {
-    if (panel.classList.contains("minimized")) return;
+  function startDrag(e) {
     if (e.target.closest("button")) return;
     dragging = true; dragMoved = false;
     const r = panel.getBoundingClientRect();
     dx = e.clientX - r.left; dy = e.clientY - r.top;
     panel.style.transition = "none";
+    e.preventDefault();
+  }
+  $("#meshy-dl-header").addEventListener("mousedown", startDrag);
+  panel.addEventListener("mousedown", (e) => {
+    if (!panel.classList.contains("minimized")) return;
+    if (e.target === panel) startDrag(e);
   });
   document.addEventListener("mousemove", (e) => {
     if (!dragging) return;
@@ -536,7 +541,7 @@
     panel.style.right = "auto"; panel.style.bottom = "auto";
   });
   document.addEventListener("mouseup", () => {
-    if (dragging) setTimeout(() => dragMoved = false, 50);
+    if (dragging) setTimeout(() => dragMoved = false, 80);
     dragging = false; panel.style.transition = "";
   });
 
