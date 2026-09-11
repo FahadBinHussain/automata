@@ -5,6 +5,16 @@ routes are added, and the Proton client rewrites ServiceSettings.json
 split-tunnel edits on restart - don't fight the config file. Instead, route
 through v2rayN's mihomo core (which is allowed to egress freely).
 
+**first check the VPN state**: relay requires mihomo's socks port (read from
+`binConfigs/config.json`). if that socks port is NOT listening, the VPN/proxy
+stack is down and the relay is pointless (it just dead-ends) - connect DIRECT
+with psql to the pooler hostname instead: real password URL-decoded from the
+project's `.env.local` via `$env:PGPASSWORD`, keyword-form connstring, and NO
+`options='endpoint=...'` (with the pooler hostname that trips Neon's
+`Inconsistent project name inferred from SNI ... and project option` because
+SNI already routes the endpoint). triage: `Test-NetConnection 127.0.0.1
+-Port <socksport>` false -> go direct, not a relay problem.
+
 ## Prerequisites
 
 - v2rayN running (scoop app `v2rayn`), mihomo core alive, socks + external
