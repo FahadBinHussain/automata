@@ -77,13 +77,25 @@ console.log('click', await ev(`(function(){const b=document.querySelector('#pow-
 
 const t0 = Date.now(); let solved = false;
 let unlocked = false;
+let lastFeat = '{}';
+const FEAT_EXPR = `JSON.stringify({chal:window.__fcChallenge||'',id:document.querySelector('input[name=pow_id]')?.value||'',nonce:document.querySelector('input[name=pow_nonce]')?.value||'',elapsed:document.querySelector('input[name=pow_elapsed]')?.value||'',pauses:document.querySelector('input[name=pow_pauses]')?.value||'',dataLen:(document.querySelector('input[name=pow_data]')?.value||'').length,xFull:document.querySelector('input[name=pow_x]')?.value||''})`;
 for (let i = 0; i < 90; i++) {
   await sleep(1000);
   const chal = await ev(`window.__fcChallenge||''`).catch(() => '');
   const diff = await ev(`window.__fcDifficulty||0`).catch(() => 0);
+  // snapshot fields every tick; keep last non-empty (submit wipes them)
+  try {
+    const f = await ev(FEAT_EXPR).catch(() => '{}');
+    if (f && f !== '{}') {
+      const o = JSON.parse(f);
+      if (o.nonce || o.dataLen > 0) lastFeat = f;
+    }
+  } catch (e) {}
   if (i % 10 === 0) console.log(`wait t=${i}s chal=${chal ? String(chal).slice(0, 8) + '...' : '-'} diff=${diff}`);
   if (chal && diff && !solved) {
-    console.log(`solve diff=${diff} ...`);
+    const yhost = await ev(`window.__fcYhost||''`).catch(() => '');
+    const yres = await ev(`JSON.stringify(performance.getEntriesByType('resource').map(r=>r.name).filter(u=>/cutcaptcha|pow\\.filecrypt|captcha\\.filecrypt/.test(u)))`).catch(() => '[]');
+    console.log(`solve diff=${diff} yhost=${yhost} yres=${yres} ...`);
     const out = spawnSync('python', [powPy, String(chal), String(diff)], { encoding: 'utf-8', timeout: 120000 });
     if (out.status !== 0) { console.error('pow.py err', (out.stderr || out.stdout || '').slice(0, 300)); process.exit(1); }
     const j = JSON.parse(out.stdout);
@@ -93,10 +105,15 @@ for (let i = 0; i < 90; i++) {
   }
   const state = await ev(`document.querySelector('#pow-captcha') ? document.querySelector('#pow-captcha').getAttribute('data-state') : 'gone'`).catch(() => '?');
   if (state === 'done' || state === 'gone') {
-    for (let k = 0; k < 10; k++) {
+    console.log('RUNDATA ' + lastFeat);
+    // unlock = captcha GONE *and* links present (cap=false alone can be transient unload)
+    for (let k = 0; k < 12; k++) {
       await sleep(3000);
       const cap = await ev(`!!document.querySelector('#pow-captcha')`).catch(() => true);
-      if (!cap) { unlocked = true; break; }
+      if (!cap) {
+        const hasLinks = await ev(`document.querySelectorAll('form[onsubmit*="CNLPOP"]').length > 0 || Array.from(document.querySelectorAll('a')).some(a=>/^https?:\\/\\//.test(a.href) && !/filecrypt\\.cc/.test(a.href))`).catch(() => false);
+        if (hasLinks) { unlocked = true; break; }
+      }
     }
     break;
   }

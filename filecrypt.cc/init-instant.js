@@ -6,6 +6,26 @@
   const OrigWorker = window.Worker;
   window.__fcPatched = true;
   window.__fcSolution = null;
+  window.__fcYhost = '';
+  window.__fcXhead = '';
+  // pass-through snoop: record which y-host answered (no behavior change)
+  try {
+    const origFetch = window.fetch;
+    window.fetch = function(input, init) {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (typeof url === 'string' && (url.includes('cutcaptcha.net') || url.includes('pow.filecrypt.cc') || url.includes('captcha.filecrypt.cc')) && !url.includes('v=')) {
+        return origFetch.apply(this, arguments).then(async r => {
+          try {
+            const clone = r.clone();
+            const j = await clone.json();
+            if (j && j.cid) window.__fcYhost = url.split('?')[0];
+          } catch (e) {}
+          return r;
+        });
+      }
+      return origFetch.apply(this, arguments);
+    };
+  } catch (e) {}
   window.__fcSolve = function(challenge, difficulty){
     // called by CDP to solve externally (python); returns promise that worker polls
     // CDP will set window.__fcSolution = nonce after solving
