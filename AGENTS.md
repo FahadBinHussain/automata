@@ -124,6 +124,16 @@ When the project is a single-file userscript, always copy the complete userscrip
   bundle's ref->hash set differs from the mirror's heads/tags. verified: a bundle restores byte-identical to GitHub HEAD.
 - bundles carry ALL refs/branches/tags but NOT LFS object content - `mirror-all.ps1` tars `lfs/objects` into
   `<repo>.lfs.tar.gz` when present and warns LOUD if it can't capture one.
+- **fork policy** (`github.com/forks-manifest.json`, read by mirror-all): `decision: drop` repos are
+  never cloned and any existing bundle/mirror is auto-purged; a fork only earns `keep` if it holds
+  unique bytes. how uniqueness was judged per fork: default-branch `ahead_by` vs parent (gh compare API
+  `parentOwner:parentDefault...me:myDefault`), extra branches (diff of fork vs parent branch lists), then
+  the decisive test - commits authored by me inside the fork mirror (`git log --all --author=fahad`).
+  merged-PR-only forks (grafana, Notation) and imgbot/bookmark forks drop; closed-unmerged PR work
+  (node #63321) and own-branch work (codex, alist, html-video...) keep; forks whose upstream force-reset
+  (reasonix) keep as sole copy of the old history.
+- failed fetch on an existing mirror now self-heals: delete mirror -> re-clone once (a half-fetched
+  partial clone from an aborted run no longer wedges the next run).
 - `to-mega.ps1` pushes `bundles\*.{bundle,lfs.tar.gz}` to a MEGA `/github-mirror/` folder: skips files whose name+size are
   already in `mega-state.json` + remote `ls -n`, retries once, verifies each upload by re-`ls`, and checks free space via
   `df` BEFORE starting (fails with the exact short-vs-needed GB). email comes from `MEGA_EMAIL` in `github.com\.env.local`

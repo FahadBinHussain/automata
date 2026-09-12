@@ -39,6 +39,21 @@ if ($Only) {
 }
 $repos = @($repos | Sort-Object diskUsage)
 
+$manifest = Join-Path $PSScriptRoot 'forks-manifest.json'
+$drop = @()
+if (Test-Path -LiteralPath $manifest) {
+  $drop = @((Get-Content $manifest -Raw | ConvertFrom-Json).psobject.properties | Where-Object { $_.Value.decision -eq 'drop' } | ForEach-Object { $_.Name })
+}
+foreach ($d in $drop) {
+  foreach ($stale in (Join-Path $bundles "$d.bundle"), (Join-Path $work "$d.git")) {
+    if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force; Write-Host "dropped ($d): removed $(Split-Path $stale -Leaf)" }
+  }
+}
+if ($drop) {
+  Write-Host "forks-manifest drop list: $($drop -join ', ')"
+  $repos = @($repos | Where-Object { $_.name -notin $drop })
+}
+
 function Get-Mb([string]$path) { [math]::Round((Get-Item $path).Length / 1MB, 1) }
 
 $total = $repos.Count
@@ -60,7 +75,12 @@ foreach ($r in $repos) {
   } else {
     Write-Host "$prefix incremental fetch..."
     git -C $mirror remote update --prune 2>$null
-    if ($LASTEXITCODE -ne 0) { Write-Warning "$prefix FETCH FAILED (using existing objects)"; $fresh += $name }
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "$prefix fetch failed — deleting mirror, re-cloning"
+      Remove-Item -LiteralPath $mirror -Recurse -Force
+      git clone --mirror --quiet -- $r.url $mirror 2>$null
+      if ($LASTEXITCODE -ne 0) { Write-Warning "$prefix RE-CLONE FAILED"; $failed += $name; continue }
+    }
   }
 
   $null = git -C $mirror rev-parse --verify HEAD 2>&1
