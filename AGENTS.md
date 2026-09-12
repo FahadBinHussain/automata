@@ -119,8 +119,8 @@ When the project is a single-file userscript, always copy the complete userscrip
 ## github.com whole-account bundle backup (github.com/mirror-all.ps1 + to-mega.ps1)
 
 - the goal: full account backup without adding a 2nd git remote. `mirror-all.ps1` clones every repo
-  (`git clone --mirror`) and writes one `git bundle --all` per repo under `%USERPROFILE%\Downloads\github-mirror\bundles\`;
-  mirrors stay in `...\work\` so later runs do an incremental `git remote update --prune` and only re-bundle when the
+  (`git clone --mirror`) and writes one `git bundle --all` per repo under `<script-dir>\mirror\bundles\` (gitignored `github.com/mirror/`, output lives inside the repo folder but is never committable);
+  mirrors stay in `...\mirror\work\` so later runs do an incremental `git remote update --prune` and only re-bundle when the
   bundle's ref->hash set differs from the mirror's heads/tags. verified: a bundle restores byte-identical to GitHub HEAD.
 - bundles carry ALL refs/branches/tags but NOT LFS object content - `mirror-all.ps1` tars `lfs/objects` into
   `<repo>.lfs.tar.gz` when present and warns LOUD if it can't capture one.

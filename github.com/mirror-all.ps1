@@ -10,11 +10,12 @@ purpose: for every repo of the gh-authenticated account: clone --mirror (or incr
 inputs : gh CLI logged in to the target account; git + git-lfs + tar on PATH.
 run    : .\mirror-all.ps1                        # every repo, smallest first
          .\mirror-all.ps1 -Only Decidr,Ctrl-Alt-C
-outputs: <Root>\bundles\<repo>.bundle (+ <repo>.lfs.tar.gz), mirrors kept in <Root>\work
+outputs: <script-dir>\mirror\bundles\<repo>.bundle (+ <repo>.lfs.tar.gz), mirrors kept in
+         <script-dir>\mirror\work (gitignored — never commit backup output into the repo)
 exit   : 1 if any repo failed
 #>
 param(
-  [string]$Root = (Join-Path $env:USERPROFILE 'Downloads\github-mirror'),
+  [string]$Root = (Join-Path $PSScriptRoot 'mirror'),
   [string[]]$Only = @()
 )
 
