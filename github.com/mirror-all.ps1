@@ -31,6 +31,7 @@ if ($freeGB -lt 15) { throw "only $freeGB GB free on $($Root.Substring(0,1)): â€
 Write-Host 'listing repos via gh...'
 $repos = @(gh repo list --limit 2000 --json name,url,diskUsage | ConvertFrom-Json)
 if (-not $repos) { throw 'gh repo list returned nothing â€” check: gh auth status' }
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if ($Only) {
   $missing = $Only | Where-Object { $_ -notin $repos.name }
   if ($missing) { throw "repos not found in account: $($missing -join ', ')" }
