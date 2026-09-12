@@ -2,7 +2,7 @@
 <#
 to-mega.ps1 — push the local git bundles to a MEGA folder (no re-download needed to restore).
 
-purpose: uploads bundles + lfs tars from Downloads\github-mirror\bundles to a MEGA account,
+purpose: uploads bundles + lfs tars from <script-dir>\mirror\bundles to a MEGA account,
          diffing by name+size (skips what is already there), then verifies every local file
          exists remotely. state tracked in mega-state.json; a --reload ls is used for the
          final verification pass.
@@ -18,7 +18,7 @@ exit   : 1 if any upload or verification failed
 #>
 param(
   [string]$Email,
-  [string]$Root = (Join-Path $env:USERPROFILE 'Downloads\github-mirror'),
+  [string]$Root = (Join-Path $PSScriptRoot 'mirror'),
   [string]$RemoteFolder = '/github-mirror',
   [int]$LimitSpeedKBs = 0,
   [switch]$Force
@@ -41,7 +41,7 @@ if (-not (Test-Path -LiteralPath $bundles)) { throw "missing $bundles — run mi
 $local = @(Get-ChildItem $bundles -File | Where-Object { $_.Name -match '\.(bundle|lfs\.tar\.gz)$' })
 if (-not $local) { throw "no bundles in $bundles — run mirror-all.ps1 first" }
 
-$helper = Join-Path $env:USERPROFILE 'Downloads\automata\mega.nz\mega-account.ps1'
+$helper = Join-Path (Split-Path $PSScriptRoot -Parent) 'mega.nz\mega-account.ps1'
 if (-not (Test-Path -LiteralPath $helper)) { throw "missing mega helper: $helper" }
 
 $stateFile = Join-Path $Root 'mega-state.json'
