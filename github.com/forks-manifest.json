@@ -1,0 +1,146 @@
+{
+  "alist": {
+    "decision": "keep",
+    "reason": "my commit on fix/terabox-empty-dir-dm-api (PR 9630)"
+  },
+  "awesome-chatgpt-prompts": {
+    "decision": "keep",
+    "reason": "ahead=3 main"
+  },
+  "awesome-discord": {
+    "decision": "keep",
+    "reason": "my commits on patch-2"
+  },
+  "Awesome-Nano-Banana-images": {
+    "decision": "keep",
+    "reason": "ahead=2 main"
+  },
+  "BandersnatchInteractive": {
+    "decision": "keep",
+    "reason": "my commits on add-video-seek-controls"
+  },
+  "codex": {
+    "decision": "keep",
+    "reason": "my commit on feature-thread-metadata-update-cwd"
+  },
+  "contexto": {
+    "decision": "keep",
+    "reason": "my commits on fix-contexto-*"
+  },
+  "custom-telegram-clients": {
+    "decision": "keep",
+    "reason": "ahead=1 master"
+  },
+  "Ditto": {
+    "decision": "keep",
+    "reason": "ahead=2 master (merged-PRs build work)"
+  },
+  "edit": {
+    "decision": "keep",
+    "reason": "my commit on fix-issue-template-links"
+  },
+  "hakatime": {
+    "decision": "keep",
+    "reason": "ahead=1 master"
+  },
+  "HandConnect": {
+    "decision": "keep",
+    "reason": "ahead=1 main"
+  },
+  "hosts": {
+    "decision": "keep",
+    "reason": "my commit on master (android instructions); imgbot branch"
+  },
+  "html-video": {
+    "decision": "keep",
+    "reason": "my commits on feature/add-rendered-product-promo-sample"
+  },
+  "koodo-reader": {
+    "decision": "keep",
+    "reason": "ahead=11 fix-windows-dark-titlebar fix-mobile-highlight-popup"
+  },
+  "locus-vision": {
+    "decision": "keep",
+    "reason": "my commit on fix-browser-video-playback"
+  },
+  "lumen-agent": {
+    "decision": "keep",
+    "reason": "ahead=126+exports branch"
+  },
+  "mediapipe-samples": {
+    "decision": "keep",
+    "reason": "ahead=6 main"
+  },
+  "MyopicVicar": {
+    "decision": "keep",
+    "reason": "my commit on fix-bride-mother-surname"
+  },
+  "node": {
+    "decision": "keep",
+    "reason": "PR 63321 CLOSED-UNMERGED: my doc commits exist only in this fork"
+  },
+  "notion-proxy": {
+    "decision": "keep",
+    "reason": "ahead=3 main"
+  },
+  "opencode": {
+    "decision": "keep",
+    "reason": "ahead=1, my commits on dev"
+  },
+  "picture-in-picture-chrome-extension": {
+    "decision": "keep",
+    "reason": "ahead=15 fix/tab-dimension-save"
+  },
+  "reasonix": {
+    "decision": "keep",
+    "reason": "upstream reset to main-v2; fork holds old history (sole copy)"
+  },
+  "SwiftBackupPrem": {
+    "decision": "keep",
+    "reason": "ahead=2 main"
+  },
+  "thuki": {
+    "decision": "keep",
+    "reason": "my commit on refactor-placeholder-url-constants"
+  },
+  "Wallpaper-Engine-Pkg-to-Zip": {
+    "decision": "keep",
+    "reason": "my commit on patch-1"
+  },
+  "whatsapp-ai-chatbot": {
+    "decision": "keep",
+    "reason": "ahead=2 main"
+  },
+  "github-profile-trophy": {
+    "decision": "drop",
+    "reason": "branch imgbot only (bot), 0 ahead - untouched"
+  },
+  "github-readme-stats": {
+    "decision": "drop",
+    "reason": "0 ahead, no branches - bookmark"
+  },
+  "github-readme-streak-stats": {
+    "decision": "drop",
+    "reason": "0 ahead, no branches - bookmark"
+  },
+  "grafana": {
+    "decision": "drop",
+    "reason": "my PR #124971 merged upstream; fork branch is the merged PR head only - zero unique bytes"
+  },
+  "grafana-pathfinder-app": {
+    "decision": "drop",
+    "reason": "branch imgbot only (bot), 0 ahead - untouched"
+  },
+  "Notation": {
+    "decision": "drop",
+    "reason": "5 of my commits already in upstream default branch - zero unique bytes"
+  },
+  "physical-ai-toolchain": {
+    "decision": "drop",
+    "reason": "0 ahead, no branches - bookmark"
+  },
+  "quodlibet": {
+    "decision": "drop",
+    "reason": "branch imgbot only (bot), 0 ahead - untouched"
+  }
+}
