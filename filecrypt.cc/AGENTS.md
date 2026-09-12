@@ -70,7 +70,7 @@ the "I am a human" box is a SHA-1 **proof-of-work** captcha, not an image captch
 
 **headless `solve-container.ps1`: still BLOCKED** — same as above: server rejects even with perfect PoW + pow_x/pow_y/pow_data + headers + cookie jar. see `solve-container.ps1` header. do not use for filecrypt pow.
 
-**browser fast bypass: WORKS** — `init-fast-pow.js` (injected via `agent-browser open --init-script`) replaces the slow `pow_captcha_worker.js` (100 ms slice, 4096/hash) with a tight-loop blob Worker that runs in a real Worker thread, plus mocks the `pow_y` y-captcha fetch to avoid the 3 s race timeout. keeps real `pow_x` (m.js R), `pow_data` (s.js S.collect with real pointer events), cookies, TLS, Cloudflare. measured on `profile-email@example.invalid` Edge profile (Windows 11, Edge 152):
+**browser fast bypass: WORKS** — `init-fast-pow.js` (injected via `agent-browser open --init-script`) replaces the slow `pow_captcha_worker.js` (100 ms slice, 4096/hash) with a tight-loop blob Worker that runs in a real Worker thread, plus mocks the `pow_y` y-captcha fetch to avoid the 3 s race timeout. keeps real `pow_x` (m.js R), `pow_data` (s.js S.collect with real pointer events), cookies, TLS, Cloudflare. measured on `<profile-email>` Edge profile (Windows 11, Edge 152):
 - `09844C4F93` ddownload: native 4-5 m → fast 2 m, unlocked (`hasCaptcha false`, `hasCNL true`, `0/1 Online` — host dead but gate passed)
 - `F011B92635` gofile: native 3 m → fast 5 s (init script) or 3 m native
 - `B6B1F4A7B2` 1fichier: native 5 m, fast 1-2 m

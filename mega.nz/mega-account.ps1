@@ -115,11 +115,11 @@ function Show-Usage {
     "  .\mega-account.ps1 upload <email> <local file> <remote folder>",
     "",
     "Examples:",
-    "  .\mega-account.ps1 login example-email@example.invalid",
-    "  .\mega-account.ps1 status example-email@example.invalid",
-    "  .\mega-account.ps1 run example-email@example.invalid df",
-    "  .\mega-account.ps1 run example-email@example.invalid ls /Root",
-    "  .\mega-account.ps1 upload example-email@example.invalid book.pdf /Root"
+    "  .\mega-account.ps1 login <example-email>",
+    "  .\mega-account.ps1 status <example-email>",
+    "  .\mega-account.ps1 run <example-email> df",
+    "  .\mega-account.ps1 run <example-email> ls /Root",
+    "  .\mega-account.ps1 upload <example-email> book.pdf /Root"
   ) -join [Environment]::NewLine | Write-Host
 }
 
