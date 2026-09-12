@@ -50,6 +50,13 @@ megatools CLI (scoop `megatools`, installed 2026-08-26, v1.11.5) + a vault-backe
 
 ## gotchas
 
+- **fresh (2024+) MEGA accounts cannot use megatools at all**: `megatools` 1.11.5 (last release,
+  2019) fails the login handshake on modern v3-account registrations with
+  `API call 'us' failed: Server returned error ENOENT` — misleading: the account EXISTS and the
+  password is CORRECT (verified: `rclone lsd mega:/` + `rclone about mega:` log in fine with the same
+  creds). Diagnosed 2026-09-12 on `algoject@gmail.com`. For any new account use **rclone's `mega:`
+  backend** (`github.com/to-mega.ps1` does: vault pw -> `rclone obscure` -> `RCLONE_CONFIG_MEGA_*` env,
+  nothing persisted). The 7 older vault accounts still work with megatools.
 - **Invoke-Expression eats dash flags**: the helper's `Run-Megatools` used to build one big IEX string;
   passing megatools flags (e.g. `run <email> ls -R -l --header /`) failed with "positional parameter cannot
   be found" or the flags got lost. fixed 2026-09-12: `Run-Megatools` now builds an array and calls
