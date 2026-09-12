@@ -61,3 +61,6 @@ steampowered.com/sweep.log
 # browser profiles must never be staged
 **/edge-profile/
 **/.session/
+
+# mirror-all.ps1 / to-mega.ps1 backup output (5+ GB, never commit repo history bundles)
+github.com/mirror/
