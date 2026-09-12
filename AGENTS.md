@@ -134,10 +134,12 @@ When the project is a single-file userscript, always copy the complete userscrip
   (reasonix) keep as sole copy of the old history.
 - failed fetch on an existing mirror now self-heals: delete mirror -> re-clone once (a half-fetched
   partial clone from an aborted run no longer wedges the next run).
-- `to-mega.ps1` pushes `bundles\*.{bundle,lfs.tar.gz}` to a MEGA `/github-mirror/` folder: skips files whose name+size are
-  already in `mega-state.json` + remote `ls -n`, retries once, verifies each upload by re-`ls`, and checks free space via
-  `df` BEFORE starting (fails with the exact short-vs-needed GB). email comes from `MEGA_EMAIL` in `github.com\.env.local`
-  (or `-Email`); creds resolve through the vault via `mega.nz\mega-account.ps1` - nothing is hardcoded/committed.
+- `to-mega.ps1` pushes `bundles\*.{bundle,lfs.tar.gz}` to a MEGA `/github-mirror/` folder **via rclone's `mega:`
+  backend** (NOT megatools - v1.11.5 cannot log in to 2024+ v3 MEGA accounts, see mega.nz/AGENTS.md ENOENT gotcha). diffs by
+  name+size straight from `rclone lsjson`, retries once, verifies each upload by remote size, checks quota via
+  `rclone about` BEFORE starting (fails with the exact short-vs-needed GB). email comes from `MEGA_EMAIL` in
+  `github.com\.env.local` (or `-Email`); password read live from the vault item (`bw` + `rclone obscure`, env-only
+  config, never written to rclone.conf, nothing hardcoded/committed).
 - PowerShell gotcha that bit twice here: leading-dash megatools flags (`-R -l --header`) get eaten when passed to a .ps1 via
   the call operator as loose args - pass an args ARRAY (`& $helper @a`) or the parser throws
   "positional parameter cannot be found". also `megatools ls -n <folder>` prints FULL paths + lists the folder itself -
