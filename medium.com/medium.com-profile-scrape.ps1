@@ -9,7 +9,7 @@ Medium serves the full profile JSON to logged-out visitors via the
 plus an RSS feed for stories. Verified working anonymously 2026-09-05.
 
 .USAGE
-pwsh medium.com-profile-scrape.ps1 -Handle your-handle
+pwsh medium.com-profile-scrape.ps1 -Handle <your-handle>
 
 .OUTPUT
 exit 0 + JSON profile object (stats + stories); exit 1 loud on failure.

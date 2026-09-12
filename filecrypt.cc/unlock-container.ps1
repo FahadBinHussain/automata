@@ -2,14 +2,18 @@
 # purpose: unlock a filecrypt.cc/Container/<ID>.html page without 20m manual wait
 # usage: .\unlock-container.ps1 -Url "https://filecrypt.cc/Container/09844C4F93.html" [-TimeoutSec 300]
 # output: prints Online status and CNL-decrypted host links; exits 0 on unlock, 1 on fail
-# deps: agent-browser (Edge, profile profile-email@example.invalid), init-fast-pow.js next to this script
+# deps: agent-browser (Edge; account email via .env.local AGENT_BROWSER_ACCOUNT), init-fast-pow.js next to this script
 # notes: keeps real TLS/cookies/signals, only the Worker is swapped to a tight-loop blob
 param(
   [Parameter(Mandatory=$true)][string]$Url,
   [int]$TimeoutSec = 300
 )
 $ErrorActionPreference = 'Stop'
-$env:AGENT_BROWSER_PROFILE = "$env:APPDATA\mainframe\accounts\agent-browser\profile-email@example.invalid"
+$envFile = Join-Path $PSScriptRoot '.env.local'
+if (-not (Test-Path $envFile)) { throw "missing $envFile — set AGENT_BROWSER_ACCOUNT=<your-email> there" }
+foreach ($l in (Get-Content $envFile)) { if ($l -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$') { Set-Item ("Env:" + $Matches[1]) $Matches[2].Trim() } }
+if (-not $env:AGENT_BROWSER_ACCOUNT) { throw 'AGENT_BROWSER_ACCOUNT not set in .env.local' }
+$env:AGENT_BROWSER_PROFILE = Join-Path $env:APPDATA "mainframe\accounts\agent-browser\$env:AGENT_BROWSER_ACCOUNT"
 $env:AGENT_BROWSER_EXECUTABLE_PATH = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $init = Join-Path $PSScriptRoot 'init-fast-pow.js'
 if (!(Test-Path $init)) { throw "missing $init" }

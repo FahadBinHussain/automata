@@ -57,3 +57,7 @@ steampowered.com/activated_packages.txt
 steampowered.com/skipped_packages.txt
 steampowered.com/config.json.local
 steampowered.com/sweep.log
+
+# browser profiles must never be staged
+**/edge-profile/
+**/.session/

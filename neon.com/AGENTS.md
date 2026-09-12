@@ -19,9 +19,9 @@ quota resets at the end of the billing period.
 account-wide.** Despite the official plans page wording ("a single account-wide pool"),
 creating a NEW project on the SAME account gives it a FRESH 5 GB egress bucket even
 while another project on that account is transfer-quota-dead. Verified end-to-end on
-the-daily-times (owner-email@example.invalid): old project `old-neon-project` at
+the-daily-times (<owner-email>): old project `<old-neon-project>` at
 5.53 GB (suspended, `ERROR: Your project has exceeded the data transfer quota` on
-pg_dump/psql) → created `new-neon-project` ("the-daily-times-v2") on the same
+pg_dump/psql) → created `<new-neon-project>` ("the-daily-times-v2") on the same
 account → project detail `data_transfer_bytes: 0` at creation, endpoint active,
 `psql ... SELECT 1` works. So an egress-quota-exhausted DB can be migrated to a fresh
 project on the same account (same as the blindspot migration drills, which hit the
