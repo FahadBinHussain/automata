@@ -115,3 +115,23 @@ When the project is a single-file userscript, always copy the complete userscrip
 - **hard walls, no anonymous method exists** (verified): instagram `/api/v1/users/web_profile_info` with `x-ig-app-id` header = 429 (IP-limited), facebook web+mbasic = 400 error page, reddit web/api.reddit.com/old = 403 + HTML shell, kaggle = reCAPTCHA challenge page at HTTP 200 (body title "Checking your browser - reCAPTCHA"), behance = 403, linkedin = 999. hackerrank profile genuinely deleted (REST API returns `{"error":"Not Found"}` and profile URL serves the xkcd 404 page at HTTP 200 - SOFT-404, check body not status).
 - **HTTP status alone cannot classify pages**: X/IG/Reddit/Kaggle serve 200 with login-wall/recaptcha shells; hackerrank serves 200 with a 404 page. always verify content (ownership marker / wall marker) before trusting a 200.
 - **powershell XML adapter gotcha**: `[xml]` nodes return `[string]` for simple text children but `[XmlElement]` for CDATA children - `[string]`-cast gives the type name, use `$node.get_InnerText()` after an `is [string]` type check. also: when an RSS channel has zero `<item>`, the adapter fabricates a phantom item object - check the RAW text for `<item>` before iterating.
+
+## github.com whole-account bundle backup (github.com/mirror-all.ps1 + to-mega.ps1)
+
+- the goal: full account backup without adding a 2nd git remote. `mirror-all.ps1` clones every repo
+  (`git clone --mirror`) and writes one `git bundle --all` per repo under `%USERPROFILE%\Downloads\github-mirror\bundles\`;
+  mirrors stay in `...\work\` so later runs do an incremental `git remote update --prune` and only re-bundle when the
+  bundle's ref->hash set differs from the mirror's heads/tags. verified: a bundle restores byte-identical to GitHub HEAD.
+- bundles carry ALL refs/branches/tags but NOT LFS object content - `mirror-all.ps1` tars `lfs/objects` into
+  `<repo>.lfs.tar.gz` when present and warns LOUD if it can't capture one.
+- `to-mega.ps1` pushes `bundles\*.{bundle,lfs.tar.gz}` to a MEGA `/github-mirror/` folder: skips files whose name+size are
+  already in `mega-state.json` + remote `ls -n`, retries once, verifies each upload by re-`ls`, and checks free space via
+  `df` BEFORE starting (fails with the exact short-vs-needed GB). email comes from `MEGA_EMAIL` in `github.com\.env.local`
+  (or `-Email`); creds resolve through the vault via `mega.nz\mega-account.ps1` - nothing is hardcoded/committed.
+- PowerShell gotcha that bit twice here: leading-dash megatools flags (`-R -l --header`) get eaten when passed to a .ps1 via
+  the call operator as loose args - pass an args ARRAY (`& $helper @a`) or the parser throws
+  "positional parameter cannot be found". also `megatools ls -n <folder>` prints FULL paths + lists the folder itself -
+  leaf-ify with `Split-Path -Leaf` before diffing names.
+- restore a single repo: `git clone <bundle> <dir>` (or `git remote add backup <bundle> && git fetch backup`).
+  restore everything: copy the whole `bundles\` folder off MEGA and clone per repo. bundles are already-compressed
+  packfiles - zipping them again saves ~5%.
