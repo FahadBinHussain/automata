@@ -13,7 +13,7 @@ megatools CLI (scoop `megatools`, installed 2026-08-26, v1.11.5) + a vault-backe
 - MEGA is email+password auth (2FA optional). The helper stores the password in the **Bitwarden vault**
   (item `mega.nz - <email>`).
 - password lookup order: notes `[password]` header first, then fall back to the item's `login.password`
-  field (existing items like `some-user` keep it in login.password). `Read-VaultSecret` only reads
+  field (existing items like `<some-user>` keep it in login.password). `Read-VaultSecret` only reads
   notes, so the helper has its own login.password fallback via `bw list items`.
 - `run`/`upload` read the password from the vault each time and pass `megatools <subcommand> -u <email> -p <pw> ...`.
 - **stateless**: the email is always passed explicitly, there is no active-profile/current file, nothing is stored

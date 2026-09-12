@@ -15,7 +15,7 @@ function Notify($state, $msg) {
 }
 try {
     Log 'daily backup+publish starting'
-    Set-Location 'C:\Users\<user>\Downloads\mainframe'
+    Set-Location (Join-Path $env:USERPROFILE 'Downloads\mainframe')
     $marker = 'C:\tmp\daily-backup-lastdate.txt'
     $today = Get-Date -Format 'yyyy-MM-dd'
     if (Test-Path $marker) {

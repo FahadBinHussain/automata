@@ -1,12 +1,12 @@
 # hotdebrid rapidgator -> direct file. no agent-browser. needs: node/npx + Edge.
-# usage: pwsh get-premiumlink.ps1 -Url "https://rapidgator.net/file/....html" [-OutDir "C:\Users\<user>\Downloads"]
+# usage: pwsh get-premiumlink.ps1 -Url "https://rapidgator.net/file/....html" [-OutDir "$([IO.Path]::Combine($env:USERPROFILE,"Downloads"))"]
 # flow (all proven 2026-09-09): headed Edge opens generator -> fill link -> trusted click
 # Generate (eval-click does NOT fire handler) -> /api returns ticket/next/link ->
 # b1(link,'_self',next,ticket) form-POSTs (page's own fn) through box_03/box_04 ->
 # directDl=1 -> Edge downloads single-use /dl itself (cookies + single connection).
 param(
   [Parameter(Mandatory = $true)][string]$Url,
-  [string]$OutDir = "C:\Users\<user>\Downloads",
+  [string]$OutDir = "$([IO.Path]::Combine($env:USERPROFILE,"Downloads"))",
   [int]$TimeoutMin = 20
 )
 $ErrorActionPreference = 'Stop'
