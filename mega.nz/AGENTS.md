@@ -50,6 +50,10 @@ megatools CLI (scoop `megatools`, installed 2026-08-26, v1.11.5) + a vault-backe
 
 ## gotchas
 
+- **Invoke-Expression eats dash flags**: the helper's `Run-Megatools` used to build one big IEX string;
+  passing megatools flags (e.g. `run <email> ls -R -l --header /`) failed with "positional parameter cannot
+  be found" or the flags got lost. fixed 2026-09-12: `Run-Megatools` now builds an array and calls
+  `& megatools @argList` directly - any megatools subcommand + flags works through `run`.
 - `put` does NOT auto-create the target remote folder - run `mkdir` first or `put` fails.
 - **cannot upload to `/` toplevel** - use `/Root` (or a subfolder of it) as the remote path.
 - `-u`/`-p` are subcommand options: `megatools <subcommand> -u X -p Y ...`, not before the subcommand.

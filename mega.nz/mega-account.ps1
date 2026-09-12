@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$VaultModule = "<user-home>\Downloads\mainframe\vault-secret.psm1"
+$VaultModule = Join-Path $env:USERPROFILE "Downloads\mainframe\vault-secret.psm1"
 
 # --- helpers ---
 
@@ -65,10 +65,8 @@ function Run-Megatools {
   param([string] $Email, [string] $Subcommand, [string[]] $Args)
   $normalized = Normalize-Email $Email
   $pw = Read-MegaPassword $normalized
-  $escSub = $Subcommand
-  $escArgs = $Args | ForEach-Object { "'$_'" }
-  $cmd = "megatools $escSub -u '$normalized' -p '$pw' " + ($escArgs -join " ")
-  Invoke-Expression $cmd
+  $argList = @($Subcommand, '-u', $normalized, '-p', $pw) + @($Args)
+  & megatools @argList
 }
 
 # --- commands ---
