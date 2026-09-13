@@ -111,11 +111,11 @@ foreach ($f in $local) {
   $mb = [math]::Round($f.Length / 1MB, 1)
   $dest = "$remotePath/$($f.Name)"
   $okFile = $false
-  foreach ($attempt in 1, 2) {
-    $null = & rclone copyto $f.FullName $dest --no-check-certificate --stats-one-line --stats 30s 2>&1
+  foreach ($attempt in 1, 2, 3) {
+    $rc = & rclone copyto $f.FullName $dest --timeout 5m --contimeout 60s --retries 2 --low-level-retries 8 --stats-one-line --stats 60s 2>&1
     if ($LASTEXITCODE -eq 0) { $okFile = $true; break }
-    Write-Warning "$($f.Name): attempt $attempt failed (exit $LASTEXITCODE)"
-    Start-Sleep -Seconds (3 * $attempt)
+    Write-Warning "$($f.Name): attempt $attempt failed (exit $LASTEXITCODE): $(@($rc | ForEach-Object { [string]$_ } | Where-Object { $_ } | Select-Object -Last 2) -join ' ')"
+    Start-Sleep -Seconds (10 * $attempt)
   }
   if (-not $okFile) { Write-Error "$($f.Name): UPLOAD FAILED" -EA Continue; $err += $f.Name; continue }
   $rf2 = Get-RemoteFiles $dest | Where-Object { $_.Name -replace '/', '\' -eq $f.Name }
