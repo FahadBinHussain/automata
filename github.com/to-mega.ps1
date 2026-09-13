@@ -34,6 +34,13 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) { throw 'rclone not on PATH (scoop install rclone)' }
+# scoop's rclone shim corrupts quoted args under Start-Process; find the real exe
+$script:rcloneExe = @(
+  (Join-Path $env:USERPROFILE 'scoop\apps\rclone\current\rclone.exe')
+  (Get-Command rclone).Source
+) + (@($env:PATH -split ';' | ForEach-Object { Join-Path $_ 'rclone.exe' })) |
+  Where-Object { $_ -and (Test-Path -LiteralPath $_) -and $_ -notmatch '\\shims\\' } | Select-Object -First 1
+if (-not $script:rcloneExe) { throw "only the scoop SHIM rclone.exe resolves (Start-Process breaks quoted args through shims) — keep the real binary at ~\\scoop\\apps\\rclone\\current\\rclone.exe" }
 
 if (-not $Email) {
   $envFile = Join-Path $PSScriptRoot '.env.local'
@@ -107,7 +114,7 @@ $sw = [Diagnostics.Stopwatch]::StartNew()
 function Invoke-RcloneCopyDeadline {
     param([string]$Src, [string]$Dest, [int]$MaxSec)
     $outF = Join-Path $env:TEMP "to-mega-rc-$([Guid]::NewGuid().ToString('N')).log"
-    $rp = Start-Process rclone -ArgumentList @('copyto', "`"$Src`"", "`"$Dest`"", '--stats-one-line', '--contimeout', '60s', '--retries', '1', '--low-level-retries', '5') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$outF.out" -RedirectStandardError "$outF.err"
+    $rp = Start-Process $script:rcloneExe -ArgumentList @('copyto', "`"$Src`"", "`"$Dest`"", '--stats-one-line', '--contimeout', '60s', '--retries', '1', '--low-level-retries', '5') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$outF.out" -RedirectStandardError "$outF.err"
     if (-not $rp.WaitForExit($MaxSec * 1000)) {
         try { $rp.Kill($true) } catch {}
         $tail = (Get-Content "$outF.err" -Tail 2 -EA SilentlyContinue) -join ' '
