@@ -117,13 +117,13 @@ foreach ($f in $local) {
     Write-Warning "$($f.Name): attempt $attempt failed (exit $LASTEXITCODE)"
     Start-Sleep -Seconds (3 * $attempt)
   }
-  if (-not $okFile) { Write-Error "$($f.Name): UPLOAD FAILED"; $err += $f.Name; continue }
+  if (-not $okFile) { Write-Error "$($f.Name): UPLOAD FAILED" -EA Continue; $err += $f.Name; continue }
   $rf2 = Get-RemoteFiles $dest | Where-Object { $_.Name -replace '/', '\' -eq $f.Name }
   if ($rf2 -and $rf2.Bytes -eq $f.Length) {
     $up += $f.Name
     Write-Host ("[{0:hh\:mm\:ss}] up {1} ({2} MB, {3:N1} MB/s avg)" -f $sw.Elapsed, $f.Name, $mb, ($f.Length / 1MB / [math]::Max($sw.Elapsed.TotalSeconds, 1)))
   } else {
-    Write-Error "$($f.Name): uploaded but remote size mismatch/missing"; $err += $f.Name
+    Write-Error "$($f.Name): uploaded but remote size mismatch/missing" -EA Continue; $err += $f.Name
   }
 }
 
