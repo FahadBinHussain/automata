@@ -103,18 +103,36 @@ Write-Host "$($remote.Count) file(s) already in $RemoteFolder"
 
 $up = @(); $err = @(); $sk = 0; $skippedBytes = 0
 $sw = [Diagnostics.Stopwatch]::StartNew()
+
+function Invoke-RcloneCopyDeadline {
+    param([string]$Src, [string]$Dest, [int]$MaxSec)
+    $outF = Join-Path $env:TEMP "to-mega-rc-$([Guid]::NewGuid().ToString('N')).log"
+    $rp = Start-Process rclone -ArgumentList @('copyto', "`"$Src`"", "`"$Dest`"", '--stats-one-line', '--contimeout', '60s', '--retries', '1', '--low-level-retries', '5') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$outF.out" -RedirectStandardError "$outF.err"
+    if (-not $rp.WaitForExit($MaxSec * 1000)) {
+        try { $rp.Kill($true) } catch {}
+        $tail = (Get-Content "$outF.err" -Tail 2 -EA SilentlyContinue) -join ' '
+        Remove-Item "$outF.out", "$outF.err" -Force -EA SilentlyContinue
+        return @{ Code = 124; Tail = "wall-clock ${MaxSec}s exceeded (killed): $tail" }
+    }
+    $code = $rp.ExitCode
+    $tail = (Get-Content "$outF.err" -Tail 2 -EA SilentlyContinue) -join ' '
+    Remove-Item "$outF.out", "$outF.err" -Force -EA SilentlyContinue
+    return @{ Code = $code; Tail = $tail }
+}
+
 foreach ($f in $local) {
   if (-not $Force -and $remoteByName.ContainsKey($f.Name) -and $remoteByName[$f.Name] -eq $f.Length) {
     $sk++; $skippedBytes += $f.Length
     continue
   }
   $mb = [math]::Round($f.Length / 1MB, 1)
+  $deadline = [Math]::Min(7200, 300 + [int]($f.Length / 1MB * 25))
   $dest = "$remotePath/$($f.Name)"
   $okFile = $false
   foreach ($attempt in 1, 2, 3) {
-    $rc = & rclone copyto $f.FullName $dest --timeout 5m --contimeout 60s --retries 2 --low-level-retries 8 --stats-one-line --stats 60s 2>&1
-    if ($LASTEXITCODE -eq 0) { $okFile = $true; break }
-    Write-Warning "$($f.Name): attempt $attempt failed (exit $LASTEXITCODE): $(@($rc | ForEach-Object { [string]$_ } | Where-Object { $_ } | Select-Object -Last 2) -join ' ')"
+    $res = Invoke-RcloneCopyDeadline -Src $f.FullName -Dest $dest -MaxSec $deadline
+    if ($res.Code -eq 0) { $okFile = $true; break }
+    Write-Warning "$($f.Name): attempt $attempt failed (exit $($res.Code)): $($res.Tail)"
     Start-Sleep -Seconds (10 * $attempt)
   }
   if (-not $okFile) { Write-Error "$($f.Name): UPLOAD FAILED" -EA Continue; $err += $f.Name; continue }
@@ -125,6 +143,7 @@ foreach ($f in $local) {
   } else {
     Write-Error "$($f.Name): uploaded but remote size mismatch/missing" -EA Continue; $err += $f.Name
   }
+  Start-Sleep -Milliseconds 700
 }
 
 $upBytes = ($local | Where-Object { $_.Name -in $up } | Measure-Object Length -Sum).Sum
