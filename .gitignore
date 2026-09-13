@@ -49,9 +49,6 @@ tools/agents-sync/agent-rules-sync.ps1.bak-20260615
 *.exe~
 supabase.com/supabase-seed-lumen.ps1
 
-# external site session cookies
-**/.session/
-
 # steam free-license sweep runtime state (progress + local config)
 steampowered.com/activated_packages.txt
 steampowered.com/skipped_packages.txt
