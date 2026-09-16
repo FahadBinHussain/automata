@@ -61,3 +61,6 @@ steampowered.com/sweep.log
 
 # mirror-all.ps1 / to-mega.ps1 backup output (5+ GB, never commit repo history bundles)
 github.com/mirror/
+
+# reddit web-session cookie export (auth material, never commit)
+reddit.com/.reddit-session.json
