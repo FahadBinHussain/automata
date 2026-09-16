@@ -19,14 +19,21 @@ helper: `$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1`; profiles ke
 **local champion (verified on our box): the tugstugi/BengaliAI whisper-medium fine-tune, run as ct2 int8 via faster-whisper.**
 - this is what the bd community converged on (Bengali.AI Kaggle 1st place; most-downloaded bn model ~1.8k/mo; whisper-transcriber ships it; BengaliLoop baseline 34% WER long-form, 24% with the full recipe).
 - our retest (2026-09-14): `SayedShaun/bengali-whisper-medium-ct2`, forced `language="bn"`, CPU int8 → clean complete Bangla-script transcript of the same clip where turbo gave devanagari/truncation. the old "bengaliAI medium rejected (OOM)" was a packaging artifact (transformers fp32), not the model.
-- working command (ct2 must be pinned — see gotchas):
-  `uv run --no-project --python 3.11 --with faster-whisper --with ctranslate2==4.4.0 --with "setuptools<81" --with soundfile python <script> SayedShaun/bengali-whisper-medium-ct2`
+- run it: `uv run --script whatsapp.com\bn-stt.py <audio> [--beam N] [--device cpu|cuda|auto] [--vad]` (PEP 723 pins everything incl. ct2 4.4.0; auto-picks GPU). measured on desktop-main (13.8s clip, whisper-medium ct2):
+  | path | time | rtf |
+  |---|---|---|
+  | cpu int8, beam 5 | 140s | 10.1x |
+  | gpu int8_float16, beam 1 | 14.6s | 1.1x |
+  | gpu int8_float16, beam 5 | 17.9s | 1.3x |
+  | gpu int8_float16, beam 5 + `--vad` | 9.6s | 0.7x |
 - gotchas that cost an hour each:
   - ctranslate2 4.5+/4.6 on this windows box dies with `mkl_malloc: failed to allocate memory` (hybrid-CPU bug, fails on load AND on beam search; `MKL_DISABLE_FAST_MM=1` doesn't help). pin `ctranslate2==4.4.0` (needs `setuptools<81` for its pkg_resources import).
+  - GPU needs **cuDNN 8**, not 9: `nvidia-cudnn-cu12==8.9.7.29` — with 9.x you get `Could not locate cudnn_ops_infer64_8.dll` (cublas latest is fine). use `compute_type=int8_float16` or beam 5 OOMs the 8GB card; and ct2 crashes in atexit on exit (output already flushed) → end the script with `os._exit(0)`.
+  - `--vad` (silero) crashes with `Unexpected input data type. Actual: tensor(double), expected: tensor(float)` unless the audio array is cast to float32 — soundfile returns float64.
   - HF anonymous download crawls at ~50KB/s and xet stalls; set `HF_TOKEN` (mainframe hf account) + `HF_HUB_DISABLE_XET=1`.
   - bangla output crashes cp1252 console: set `PYTHONIOENCODING=utf-8` (or redirect to file).
   - NFC-normalize output (precomposed য়/ড়/ঢ় vs nukta — an 18% WER trap in evals).
-  - best practice from the DL Sprint 4.0 winning recipe, for longer/messier audio: Silero VAD first (biggest free win), ≤28s chunks, `condition_on_previous_text=False`, strip non-U+0980–09FF, dedupe repeated phrases. for dialect-heavy casual speech try the regional variant `IamSanjid/tugstugi_bengaliai-regional-asr_whisper-medium-ct2`.
+  - longer/messier audio: `--vad` + ≤28s chunks, `condition_on_previous_text=False`, strip non-U+0980–09FF, dedupe repeated phrases (DL Sprint 4.0 winning recipe). for dialect-heavy casual speech try the regional variant `IamSanjid/tugstugi_bengaliai-regional-asr_whisper-medium-ct2`.
   - punctuation add-on: `asr-punct-restore` (adds । , ?), same Kaggle solution.
 - alternatives verified by research (not run here): `BuzzASR/bengali` (whisper-large-v3 + native bn tokenizer, MIT, CER 5.5–10 — newest, transformers fp16 needs GPU); `hishab/titu_stt_bn_fastconformer` (~36x faster, same accuracy, but NeMo install + CC-BY-NC); ai4bharat IndicWhisper-bn (MIT, plain transformers, ~20% Vistaar WER).
 - cloud: `gemini-3.5-flash` via litellm gateway stays the cleanest bangla + banglish code-switch route (official bn-BD support, free tier) — still primary when the HF space is alive. azure speech F0 (5h/mo free, bn-BD mature) is the best standalone API fallback.
@@ -34,6 +41,7 @@ helper: `$env:USERPROFILE\Downloads\mainframe\whatsapp-account.ps1`; profiles ke
 ## GPU for python (RTX 5050 8GB) — reusable wiring
 
 - python finds NO `cublas64_12.dll` by default → ctranslate2/torch silently fall back to CPU. fix: `uv --with nvidia-cublas-cu12,nvidia-cudnn-cu12`, then prepend `<site-packages>/nvidia/*/bin` to `os.environ["PATH"]` BEFORE importing faster_whisper/torch. resolve base via `import nvidia; os.path.dirname(nvidia.__path__[0])` then `glob('nvidia/*/bin')` (site.getsitepackages of the ephemeral uv env is wrong).
+- cuDNN major version must match what your lib expects: ctranslate2 4.4.0 wants cuDNN **8** (`nvidia-cudnn-cu12==8.9.7.29`) — resolve 9.x and you get `Could not locate cudnn_ops_infer64_8.dll`. cublas 12.9 is fine.
 - torch GPU: `--with "torch==2.8.0+cu128" --extra-index-url https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match` → `torch.cuda.is_available()` True.
 - after a CUDA OOM the context poisons → next run "unknown error"; kill leaked python procs or run small models on CPU.
 - `uv` here has no `--torch-backend`; pin the +cu128 wheel + extra-index-url instead.
