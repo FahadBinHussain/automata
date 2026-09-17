@@ -64,3 +64,14 @@ github.com/mirror/
 
 # reddit web-session cookie export (auth material, never commit)
 reddit.com/.reddit-session.json
+
+# torrent tooling - lives in automata-private now
+fmhy.net/
+knaben.org/
+qbittorrent.com/
+qbittorrent.org/
+rutor.info/
+thepiratebay.org/
+tools/qbittorrent-via-proton/
+tools/torrent-multi-search.ps1
+tools/AGENTS.md
