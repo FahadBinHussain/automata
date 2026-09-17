@@ -109,7 +109,7 @@ function Write-RefreshTokenVault {
         return
     }
     $userPrefix = ($normalized -split '@')[0]
-    Write-VaultSecretToExisting -Email $normalized -NamePattern 'login.microsoftonline.com*' -Header '[refresh token]' -Value $RefreshToken.Trim() -ItemName "login.microsoftonline.com - $userPrefix" -Username $normalized -Uri 'https://login.microsoftonline.com'
+    Write-VaultSecretToExisting -Email $normalized -NamePattern 'login.microsoftonline.com*' -Header '[refresh token]' -Value $RefreshToken.Trim() -ItemName 'login.microsoftonline.com' -Username $normalized -Uri 'https://login.microsoftonline.com'
 }
 
 function Read-RefreshTokenVault {

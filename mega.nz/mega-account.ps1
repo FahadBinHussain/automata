@@ -82,7 +82,7 @@ function Invoke-Login {
   if ($pw.Length -eq 0) { throw "Password is required." }
   $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($pw)
   try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-  $itemName = "mega.nz - $($normalized -split '@')[0]"
+  $itemName = "mega.nz"
   Write-VaultSecretToExisting -Email $normalized -NamePattern "mega.nz" -Header "[password]" -Value $plain.Trim() -ItemName $itemName -Username $user -Uri "https://mega.nz"
   Write-Host "MEGA credentials saved to vault: $normalized"
 }
