@@ -197,3 +197,49 @@ Database (pooler session mode)`; the app's live copy is the Render service env
 (read it back with `GET /v1/services/{sid}/env-vars` if the vault is down).
 old neon DSN for rollback: `C:\tmp\vw-rollback.txt`; dump:
 `backups\vaultwarden\vaultwarden_2026-09-17.dump`.
+
+## same recipe, second instance: dailybnp (2026-09-17)
+
+moved the **dailybnp.com** news portal off burning Neon (`Daily-BNP`,
+sparkling-shape-81096821, ahmedtouhid88, 91.63/100 CU-h, always-on, ~33h to
+death) onto a fresh free Supabase project `dailybnp`
+(`hgjurljzuntgpuhxloza`, us-east-1, slot 2/2 on fahadbix@gmail.com). same
+dump -> restore -> harden -> flip -> prove recipe; two things differed.
+
+**1. the app is Next.js + Prisma + NextAuth on VERCEL, not a Render service.**
+the flip is a Vercel env change + a new deployment, not a Render env PUT:
+- the old `DATABASE_URL` was type `encrypted` (unreadable via API). delete it
+  (`DELETE /v9/projects/dailybnp/env/{id}?teamId=`) then POST the new one with
+  `type: "plain"` and `target: ["production","preview","development"]` - the
+  API rejects `"config"`, wants `plain`.
+- `POST /v13/deployments/{id}/redeploy` 404s ("endpoint not found") on this
+  account - do NOT chase it. instead create a fresh deployment from the same
+  git source: `POST /v13/deployments?teamId=` with
+  `{name, project, target:"production", gitSource:{type:"github", repoId, ref, sha}}`
+  (repoId + sha from `GET /v13/deployments/{latest}`). right after creation the
+  GET on the new id 404s for ~a minute while it initializes - the *list*
+  endpoint (`/v6/deployments?projectId=`) already shows `READY`; poll that.
+- the import cron (cron-job.org) hits a Vercel API route, not the DB, so it
+  needs NO reconfiguration - it just keeps writing through the app.
+
+**2. NextAuth's token tables make the PostgREST exposure worse.** the restored
+schema includes NextAuth's `Account` (access_token / refresh_token /
+id_token), `Session` and `VerificationToken`. unhardened those are live OAuth
+credentials readable by strangers. the same RLS + REVOKE block covers them -
+verified `SET ROLE anon` gets `permission denied` while Prisma's `postgres`
+service role still reads. note the app originally looked Supabase-native
+(roles `authenticator`/`anonymous`/`authenticated`, empty `auth`/`pgrst`
+schemas) but its real auth is NextAuth in `public` - dump `-n public` only and
+skip the empty legacy schemas.
+
+**proving the cutover on a cron-driven app:** the importer writes a heartbeat
+to `SystemConfig.source_import_external_token_last_run_at` every ~2 min, so
+read that column on BOTH DBs around a cycle. target advanced + source frozen
+across two reads = done (04:05:10 -> 04:07:05 on supabase, neon stuck at
+03:57:05).
+
+where things live: DSN in vault item `supabase.com` (fahadbix) under
+`DailyBNP Database (pooler session mode)`; project ref in
+`daily-bnp\.env.local` (repo `FahadBinHussain/daily-bnp`); rollback neon DSN
+`C:\tmp\bnp-rollback.txt`; dump
+`backups/daily-bnp/dailybnp_2026-09-17.dump` (4.45 MB, public schema only).
