@@ -53,6 +53,28 @@ with a PAT - they need the dashboard user JWT (from
 
 ## gotchas
 
+- **supabase-quota.ps1 vault module path was a literal placeholder (fixed 2026-09-17)**: the
+  script had `$vaultModule = "<user-home>\Downloads\mainframe\vault-secret.psm1"` - a literal
+  string that never resolves, so EVERY run died at Import-Module with "vault module not found".
+  the docs convention writes `C:\Users\<user>` in AGENTS.md, but executable code must use
+  `$env:USERPROFILE` / `Join-Path $env:USERPROFILE ...`. audit other automata scripts for the
+  same placeholder leak if they touch mainframe.
+- **mainframe supabase-usage-table.ps1 is token.txt-only, not vault (2026-09-17)**:
+  `supabase-account.ps1` (login/token-add) writes the PAT to BOTH the vault and
+  `%APPDATA%\mainframe\accounts\supabase\<email>\token.txt`, but two profiles here had the
+  vault secret and NO token.txt, so `supabase-usage-table.ps1` printed the false negative
+  "No Supabase projects found." instead of an error - it silently treats a missing token.txt
+  as "zero projects". if that line ever appears again, check `Test-Path ...\<email>\token.txt`
+  first; materialize it from the vault (`Read-VaultSecret -ValueRegex 'sbp_v0_[A-Za-z0-9]+'`)
+  rather than re-running `token-add`.
+- **refresh token session_expired vs already_used are DIFFERENT failures (2026-09-17)**:
+  `400 refresh_token_already_used` = rotation desync (script crashed between POST and vault
+  save; re-login NOT needed if the rotated token can be recovered). `400 session_expired` /
+  "Invalid Refresh Token: Session Expired (Inactivity)" = the dashboard session itself died
+  from inactivity; no token trick recovers it, only the agent-browser login bootstrap below.
+  the supabase-quota.ps1 error text already distinguishes them - read it before assuming
+  rotation desync.
+
 - **refresh token rotation / already_used (2026-09-02)**: every refresh returns
   a NEW refresh token and the old one dies immediately; if you don't save it
   back (crash between POST and vault write, BW_SESSION expiry, etc.) the

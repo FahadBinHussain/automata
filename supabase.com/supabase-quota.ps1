@@ -49,7 +49,7 @@ if (-not $OrgSlug) { $OrgSlug = $env:SUPABASE_ORG_SLUG }
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$vaultModule = "<user-home>\Downloads\mainframe\vault-secret.psm1"
+$vaultModule = Join-Path $env:USERPROFILE 'Downloads\mainframe\vault-secret.psm1'
 if (-not (Test-Path $vaultModule)) { throw "vault module not found at $vaultModule - is mainframe cloned?" }
 Import-Module $vaultModule -Force
 
