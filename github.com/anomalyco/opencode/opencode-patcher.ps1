@@ -72,6 +72,11 @@ if ($SkipBuild) {
     # 2. build single platform binary
     Log "building patched opencode (--single, this takes ~2-3 minutes)..."
     $env:OPENCODE_CHANNEL = "patch"
+    # report the fork's real version instead of the synthetic 0.0.0-patch-<date>
+    # (Script.version returns OPENCODE_VERSION verbatim when set - packages/script/src/index.ts)
+    $env:OPENCODE_VERSION = (Get-Content "$srcDir\packages\opencode\package.json" -Raw | ConvertFrom-Json).version
+    if (-not $env:OPENCODE_VERSION) { throw "could not read version from $srcDir\packages\opencode\package.json" }
+    Log "stamping version: $env:OPENCODE_VERSION (channel: $env:OPENCODE_CHANNEL)"
     # ensure bun is on PATH (scoop shims)
     $env:Path = "$env:USERPROFILE\scoop\shims;$env:Path"
     bun --version 2>&1 | Out-Null

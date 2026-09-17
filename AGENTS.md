@@ -147,3 +147,27 @@ When the project is a single-file userscript, always copy the complete userscrip
 - restore a single repo: `git clone <bundle> <dir>` (or `git remote add backup <bundle> && git fetch backup`).
   restore everything: copy the whole `bundles\` folder off MEGA and clone per repo. bundles are already-compressed
   packfiles - zipping them again saves ~5%.
+
+## opencode scoop patcher (github.com/anomalyco/opencode/opencode-patcher.ps1)
+
+- WHY: scoop opencode (v1.18.25) is hit by bash pipe hang #32504; patcher builds fork FahadBinHussain/opencode
+  (dev + cherry-picked upstream PR #44601) with `--single` and overwrites the scoop exe. run after every
+  `scoop update opencode`.
+- **version stamping**: the build script only fabricates `0.0.0-patch-<builddate>` when channel != "latest"
+  (`packages/script/src/index.ts`), which hides the real version everywhere (TUI sidebar, debug dialog,
+  user-agent `opencode/<channel>/<version>/<client>`, telemetry). it checks `OPENCODE_VERSION` FIRST and
+  returns it verbatim, so the patcher sets `$env:OPENCODE_VERSION` from the fork's
+  `packages/opencode/package.json` (currently 1.18.25) - the binary then truthfully reports 1.18.25.
+- **keep channel "patch" on purpose**: it makes the update check query npm tag `opencode-ai/patch` (404 ->
+  binary never self-updates over the patch). channel "latest" would let it auto-update to npm latest
+  (1.18.31+) and silently un-patch.
+- **do NOT trust the exe FileVersion** (`(Get-Item opencode.exe).VersionInfo.FileVersion` = 1.3.14 on BOTH
+  official and patched builds - that is the bun compiler version, not opencode's). opencode's real version
+  lives only in the baked `OPENCODE_VERSION` string. the live `opencode --version` is the only reliable check.
+- **already-installed binary fix (no rebuild)**: to re-stamp the version on an installed exe without a
+  2-3min rebuild (and without killing the running session - the patcher force-stops opencode), hex-patch the
+  baked string in place: the literal appears twice (once as the `var n=""` version constant, once inside
+  `--user-agent=opencode/...` in the execArgv blob). replace with a SAME-LENGTH string (verify on a copy
+  with `--version` first, then rename-and-swap since Windows locks a running exe against writes but not
+  renames). worked 2026-09-17: `0.0.0-patch-202608291238` -> `1.18.25-patch-2026082912`, pre-patch kept as
+  `opencode.exe.bak-hexpatch-<ts>`. session keeps running on old bytes; relaunch picks up the new string.
