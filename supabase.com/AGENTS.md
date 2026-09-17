@@ -253,3 +253,87 @@ where things live: DSN in vault item `supabase.com` (fahadbix) under
 `daily-bnp\.env.local` (repo `FahadBinHussain/daily-bnp`); rollback neon DSN
 `C:\tmp\bnp-rollback.txt`; dump
 `backups/daily-bnp/dailybnp_2026-09-17.dump` (4.45 MB, public schema only).
+
+## third instance: wakapi (2026-09-17) - a QUOTA migration, not a dying-DB one
+
+moved the **wakapi** coding-tracker DB (`kjmphyzcfvqgxejxfmph`, fahadbix,
+ap-south-1) onto a fresh free project `wakapi` (`fqbwubhxwtswdslwzwmn`,
+ap-south-1, slot 1/2 on amihimu492@gmail.com). the trigger was different:
+neon was fine, but the OLD project sat at **502.6 MB of its 500 MB DB quota**
+(100.5%) - a soft cap (notify -> grace period -> fair-use pause/read-only/402),
+so it was a scheduled death rather than an imminent one. same dump -> restore
+-> harden -> flip -> prove recipe, but the flip is a **Render** service
+(free web service `srv-cu294r52ng1s73ftke50`, muety/wakapi, singapore,
+`https://wakapi-qt1b.onrender.com`), so the env change is the Render API, not
+Vercel.
+
+proved: old frozen at 159,224 heartbeats / 06:29:11; fresh took a live
+heartbeat POST (201) and went 159,090 -> 159,091 with exactly the test row
+(`project=wakapi-migration-verify`, 07:52:40.093).
+
+### CRITICAL: Render PUT /env-vars REPLACES the whole set - it does NOT merge
+
+`PUT /v1/services/{sid}/env-vars` is a full overwrite. i sent only the 2 vars
+i wanted to CHANGE (`WAKAPI_DB_USER`, `WAKAPI_DB_PASSWORD`) and it silently
+DELETED the other 5 (`WAKAPI_DB_TYPE`, `_HOST`, `_PORT`, `_NAME`, `_SSL`).
+symptoms were confusing: `/api/health` still returned `app=1 db=1` (db=1 is
+just "i can open a DB" - with no `WAKAPI_DB_TYPE` wakapi silently falls back
+to **SQLite**, so db=1 meant an empty sqlite FILE), and every API call 401'd
+because that sqlite file had no users. nothing in the health endpoint reveals
+the fallback. the only reliable signal was `pg_stat_activity` on the fresh
+project showing zero app sessions.
+
+the body must be a raw JSON **array**: `[{"key":"...","value":"..."}]`. the
+object wrapper `{"envVars":[...]}` is rejected 400 "invalid JSON". and
+`GET /env-vars` returns entries wrapped as
+`{"envVar":{"key":...,"value":...},"cursor":...}` - read `.envVar.key`, not
+`.key`. likewise `POST /deploys` returns the deploy object at the TOP level
+(`{id,status,...}`), NOT under `.deploy` (only the LIST endpoint wraps in
+`.deploy`).
+
+the fix (2026-09-17): GET current vars, assemble the COMPLETE 7-var set, PUT
+it back in one call, then `POST /v1/services/{sid}/deploys` with body `{}`,
+poll `GET /deploys/{id}` until `live`. rule: **never PUT a partial env set to
+Render - always send every var the service needs.**
+
+### what the 502 MB actually was (nothing was reclaimable)
+
+before migrating i tried to reclaim space and found there was nothing to
+clean: 0% dead tuples on both big tables, no index bloat, no junk tables,
+`VACUUM (ANALYZE)` changed nothing, `pg_switch_wal()` is permission-denied on
+supabase. the real composition:
+- **fixed ~180 MB floor every project pays** (postgres + extensions + supabase
+  files). measured by the `fs_used_bytes - pg_database_size - WAL` gap on two
+  QUIET projects: dailybnp 181.6 MB, vaultwarden 181.7 MB - identical.
+- 119 MB real data (heartbeats 86 MB / 159k rows, durations 19 MB, summaries
+  ~1.2 MB) - the actual user history, ~40 MB/yr growth.
+- 160 MB WAL (vs 64-80 MB on quiet projects) because wakapi writes a heartbeat
+  every ~2 min 24/7. WAL is RECYCLED at checkpoints (`checkpoint_timeout`=300s,
+  `min_wal_size`=1024 MB) - it is a circular journal, not a one-way ratchet.
+
+so ~36% of the volume is a fixed tax, not the user's data. wakapi's retention
+setting (`WAKAPI_DATA_RETENTION_MONTHS`, default -1 = forever) would delete
+BOTH heartbeats AND summaries older than the cutoff - irreversible loss of the
+"forever coding history" - and `housekeeping.go` never cleans `durations`
+anyway. the user rejected that; migration was the only real option.
+
+### wakapi auth + heartbeat endpoints
+
+auth is `Authorization: Basic base64(<api_key>)` (a plain Bearer also works -
+`ExtractBearerAuth` accepts both). the api key is `users.api_key` (text) for
+the local-auth user; the `api_keys` table is empty. heartbeat POST routes live
+under the `/api` prefix: `/api/v1/users/current/heartbeats`,
+`/api/heartbeat`, `/api/heartbeats` (a POST body is a single object or an
+array; the response is `{"responses":[[{...},201]]}`). note
+`GET /api/v1/users/current` is NOT a route (404 page not found) - do not use
+it as an auth probe; POST a heartbeat instead.
+
+where things live: DSN in vault item `supabase.com` (amihimu492) under
+`Wakapi Database (pooler session mode)`; app env on the Render service (GET
+`/v1/services/srv-cu294r52ng1s73ftke50/env-vars`); dumps
+`backups/wakapi/wakapi_full_2026-09-17_pre-noise-cleanup.dump` (6.22 MB,
+restore-verified 159,090 heartbeats into a scratch db) and
+`backups/wakapi/wakapi_old_final_2026-09-17_frozen.dump` (6.29 MB, the LAST
+state of old incl. the 134 heartbeats that arrived post-dump). old project is
+frozen, NOT yet deleted (deletion is destructive - confirm with the user
+first; the final frozen dump preserves everything if it gets deleted).
