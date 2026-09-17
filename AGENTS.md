@@ -19,6 +19,16 @@ rules:
 - if a service has no clear web hostname, use its canonical public domain when one exists (e.g. `bitwarden.com`), otherwise ask before creating a non-URL folder name
 - generic/non-host folders such as `tools` are allowed only for cross-service shared helpers, and must be clearly named as such; do not add site-specific automation under `tools`
 
+## murmur scripts live in the murmur repo
+
+the murmur runtime pipeline (wacli sync, forward DB poll, HF reverse-poll, the
+local proxy) is maintained in the murmur repo itself at `scripts/murmur.ps1` -
+it is the single consolidated script and it launches `scripts/murmur-proxy.js`.
+do NOT keep copies here: automata/murmur/ was deleted 2026-09-17 because its four
+bridge scripts (murmur-poller.mjs, murmur-wacli-poller.ps1, murmur-reverse-poller.ps1,
+murmur-proxy.js) were stale superseded duplicates of murmur.ps1's functions. the
+one-off session upload also moved to murmur `scripts/upload-session.ps1`.
+
 ## what goes in here
 - one-off and reusable browser/admin/API automation scripts
 - each script should have a short header comment or companion README with purpose, inputs, and run command
@@ -28,7 +38,6 @@ rules:
 
 ## current non-conforming folders
 - `bitwarden` -> should be `bitwarden.com`
-- `murmur` -> no public hostname (private app); keep as-is until a canonical domain is decided
 - `theoldllm` -> should be the service's domain once confirmed
 - `tools` -> allowed as cross-service shared helpers (see rule above)
 
