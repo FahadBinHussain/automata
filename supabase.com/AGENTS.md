@@ -67,7 +67,17 @@ with a PAT - they need the dashboard user JWT (from
   as "zero projects". if that line ever appears again, check `Test-Path ...\<email>\token.txt`
   first; materialize it from the vault (`Read-VaultSecret -ValueRegex 'sbp_v0_[A-Za-z0-9]+'`)
   rather than re-running `token-add`.
-- **refresh token session_expired vs already_used are DIFFERENT failures (2026-09-17)**:
+- **vault item NAMING is inconsistent across supabase accounts (2026-09-17)**:
+  most accounts' PAT lives in an item named `supabase.com` / `supabase.com[2]`
+  (matches the `supabase-account.ps1` lookup `-NamePattern 'supabase.com*'`),
+  but `amihimu492@gmail.com`'s PAT is in an item named **`supabase amihimu492`**,
+  which does NOT match that pattern. consequence: the helper's `status-all`
+  reports `HasToken=False` and the profile looks unprovisioned even though a
+  valid PAT exists - and I told the user the account "needs a login" when it
+  did not. read it with `-NamePattern 'supabase*amihimu*'` (or a broad pattern)
+  before concluding an account has no token. its token.txt is now materialized
+  so the file-based bulk scripts see it regardless.
+
   `400 refresh_token_already_used` = rotation desync (script crashed between POST and vault
   save; re-login NOT needed if the rotated token can be recovered). `400 session_expired` /
   "Invalid Refresh Token: Session Expired (Inactivity)" = the dashboard session itself died
