@@ -105,3 +105,95 @@ with a PAT - they need the dashboard user JWT (from
 3. fill creds from the `supabase.com` vault item, submit; solve captcha if it appears
 4. read `localStorage["supabase.dashboard.auth.token"]`, store the refresh
    token + issuer as "Dashboard Session" in the same vault item
+
+## migrating a live app DB onto Supabase (vaultwarden, 2026-09-17)
+
+moved the vaultwarden vault DB off burning Neon (`morning-boat-12477900`,
+bengalforce, 96.27/100 CU-h, always-on) onto a fresh free Supabase project
+`vaultwarden` (`htpilohdqzbfhzlksxeg`, us-west-2, slot 2/2 on
+fahadbinhussain001@gmail.com). the app is the Render web service
+`vaultwardenn` (`srv-d31qaobuibrs73980e2g`, oregon, repo
+FahadBinHussain/vaultwarden-render-template) - same recipe as the lumen neon
+migration: dump -> restore -> verify -> flip the service env -> redeploy ->
+prove a live write -> suspend the old endpoint.
+
+recipe (zero downtime, ~15 min):
+1. `pg_dump -F c` the source (10 MB -> 975 KB compressed); save the OLD
+   DATABASE_URL to C:\tmp first so rollback survives a vault outage (this vault
+   holds every other credential - a failed swap with no rollback = total
+   lockout).
+2. create the project: `POST /v1/projects` with `{name, organization_id,
+   db_pass, region, plan:'free'}`. pick the region to match the *compute*
+   (oregon render -> us-west-2), not the old DB region.
+3. `pg_restore --no-owner --no-privileges -d <dsn> <dump>`. PG 18 dump into a
+   PG 17 target restored clean (vaultwarden's schema is plain).
+4. diff the table SET between source and target (`pg_tables where
+   schemaname='public'`), not just counts - count-only checks miss a dropped
+   table.
+5. flip the service env + redeploy, then PROVE the cutover: record
+   `max(updated_at)` on both DBs, run a real authenticated write through the
+   app (`bw sync`), re-read both. target advanced + source frozen = done.
+
+### CRITICAL: PostgREST auto-exposes every public table to the public anon key
+
+unlike plain neon, Supabase publishes a REST + GraphQL API over the `public`
+schema authenticated with the `anon` key, which is embedded in client bundles =
+effectively public. restoring a secrets DB into `public` unhardened makes the
+whole vault readable by strangers - verified: `SET ROLE anon; SELECT count(*)
+FROM ciphers` returned **1259** before hardening. this is a new attack surface
+that did not exist on neon. harden on EVERY such migration:
+
+```sql
+DO $do$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', r.tablename);
+  END LOOP;
+END $do$;
+REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+```
+
+RLS with NO policies = deny-by-default to `anon`/`authenticated`; the `postgres`
+service role BYPASSES RLS, so the app (which connects as `postgres`) is
+unaffected. **do NOT add `FORCE ROW LEVEL SECURITY`** - that would also bind
+the service role the app connects as and break it. after hardening, anon gets
+`permission denied for table ciphers` (verified) while the service role still
+reads 1259. keep the SQL in a file and `psql -f` it - a PowerShell `@"..."@`
+here-string mangles `$$` blocks (`\$do\$` -> literal backslash-dollar ->
+syntax error), and that silent failure leaves the vault EXPOSED while the
+verification query says the DO block "ran" (it did not - the error is easy to
+miss in the output).
+
+### new Supabase projects: direct DB host is IPv6-ONLY, use the session-mode pooler
+
+`db.<ref>.supabase.co` resolves to AAAA only (no A record) for fresh projects.
+from an IPv4-only machine (this one has no IPv6 route) `psql`/`pg_restore`
+fail with "could not translate host name". the universally-reachable target is
+the **session-mode pooler**: `aws-0-<region>.pooler.supabase.com:5432`, user
+`postgres.<ref>`, `?sslmode=require`. use port **5432** (session mode), NOT
+6543 (transaction mode - breaks session state/prepared statements). this works
+for the Render service too, since it routes by the `postgres.<ref>` username.
+`GET /v1/projects/{ref}/database/settings` does not exist (404 "Cannot GET") -
+do not hunt for a connection-strings endpoint, assemble the DSN from the ref +
+region.
+
+### free-tier caveats vs neon always-on
+
+- Supabase free **pauses a project after ~7 days of no DB/API activity**.
+  always-on neon had no such failure mode. the bw CLI hits the vault
+  constantly, so it should stay warm, but a fully quiet week would pause the
+  vault and break every automation's secret source. watch for it.
+- free DB quota is 500 MB (this DB is 10 MB - fine).
+- the direct connection is `db.<ref>.supabase.co:5432`, role `postgres`, but
+  the pooler is the practical target from IPv4-only hosts (above).
+
+### where the DSN lives
+
+`automata\supabase.com\.env.local` holds the project ref + region (no secret).
+the full DSN is in the vault item `supabase.com` under the header `Vaultwarden
+Database (pooler session mode)`; the app's live copy is the Render service env
+(read it back with `GET /v1/services/{sid}/env-vars` if the vault is down).
+old neon DSN for rollback: `C:\tmp\vw-rollback.txt`; dump:
+`backups\vaultwarden\vaultwarden_2026-09-17.dump`.
