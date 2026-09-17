@@ -334,6 +334,10 @@ where things live: DSN in vault item `supabase.com` (amihimu492) under
 `backups/wakapi/wakapi_full_2026-09-17_pre-noise-cleanup.dump` (6.22 MB,
 restore-verified 159,090 heartbeats into a scratch db) and
 `backups/wakapi/wakapi_old_final_2026-09-17_frozen.dump` (6.29 MB, the LAST
-state of old incl. the 134 heartbeats that arrived post-dump). old project is
-frozen, NOT yet deleted (deletion is destructive - confirm with the user
-first; the final frozen dump preserves everything if it gets deleted).
+state of old incl. the 134 heartbeats that arrived post-dump). old project
+`kjmphyzcfvqgxejxfmph` was DELETED 2026-09-17 (user-confirmed; `DELETE
+/v1/projects/{ref}` returns 200 and the project vanishes from the list within
+~10s). deletion was gated on three checks in one pass - dump file exists,
+old DB row count still exactly 159,224 / 06:29:11 (still frozen, no drift),
+live app confirmed writing to fresh - never delete on a stale read. fahadbix
+is back to 1/2 slots (dailybnp only).
