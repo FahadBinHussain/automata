@@ -56,7 +56,7 @@ before copying any script INTO automata, ask whose repo it belongs to first.
 - `theoldllm` -> should be the service's domain once confirmed
 - `tools` -> allowed as cross-service shared helpers (see rule above)
 
-When the project is a single-file userscript, always copy the complete userscript to the clipboard after every update.
+When the project is a single-file userscript, after every update: use browser-use to update the installed script directly in the browser (Violentmonkey options editor: select-all + replaceSelection paste -> Save; its Save button stays disabled until a user-origin edit - plain setValue never enables it), loudly tell the user the script was updated and they can test it now, then close the Violentmonkey options/script tabs you opened for it (only those - never tabs you did not create).
 
 ## bitwarden.com unlock gotchas (bitwarden.com/unlock-inner.ps1)
 
