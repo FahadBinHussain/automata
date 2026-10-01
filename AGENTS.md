@@ -29,6 +29,21 @@ bridge scripts (murmur-poller.mjs, murmur-wacli-poller.ps1, murmur-reverse-polle
 murmur-proxy.js) were stale superseded duplicates of murmur.ps1's functions. the
 one-off session upload also moved to murmur `scripts/upload-session.ps1`.
 
+## single-file strays live in their own repos (moved 2026-10-01)
+
+same rule as murmur: do NOT keep one-off copies of scripts that belong to
+another repo. three strays were deleted on 2026-10-01 because their real home
+is that repo's own remote:
+
+- `mainframe/daily-backup-publish.ps1` -> mainframe repo (scheduled task
+  `MainframeDailyBackup` now points at the mainframe repo copy, not this clone)
+- `notion-manager/restart-notion-manager.ps1` -> notion_manager repo (merged
+  with the portable-path version)
+- `lobehub-huggingface-template/Dockerfile` -> lobehub-huggingface-template
+  repo (pinned image tag, not `latest`)
+
+before copying any script INTO automata, ask whose repo it belongs to first.
+
 ## what goes in here
 - one-off and reusable browser/admin/API automation scripts
 - each script should have a short header comment or companion README with purpose, inputs, and run command
