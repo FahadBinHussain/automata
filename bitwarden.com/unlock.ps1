@@ -32,13 +32,19 @@ if (Test-Path $sessionFile) { $currentSession = Get-Content $sessionFile -Raw }
 if ($currentSession) {
     $env:BW_SESSION = $currentSession
     try {
-        $st = bw status 2>&1 | ConvertFrom-Json
-        if ($st.status -eq "unlocked") {
-            Write-Host "Bitwarden already unlocked (session.key valid)."
-            exit 0
+        $rawStatus = bw status --session $currentSession 2>$null
+        if ($rawStatus) {
+            $st = $rawStatus | ConvertFrom-Json
+            if ($st.status -eq "unlocked") {
+                Write-Host "Bitwarden already unlocked (session.key valid)."
+                exit 0
+            }
         }
     } catch {}
-    Remove-Item $sessionFile -Force -ErrorAction SilentlyContinue
+    $fileInfo = Get-Item -LiteralPath $sessionFile -ErrorAction SilentlyContinue
+    if ($fileInfo -and ((Get-Date) - $fileInfo.LastWriteTime).TotalMinutes -ge 60) {
+        Remove-Item $sessionFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $innerPath = Join-Path $PSScriptRoot 'unlock-inner.ps1'

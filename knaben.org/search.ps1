@@ -14,14 +14,15 @@ param(
     [switch]$Add,
     [switch]$Paused,
     [int]$MinSeeds = 1,
-    [int]$Max = 10
+    [int]$Max = 10,
+    [switch]$Json
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $url = "https://knaben.org/search/$([uri]::EscapeDataString($Query))"
 $r = Invoke-WebRequest -Uri $url -TimeoutSec 25 -UseBasicParsing
 $rows = [regex]::Matches($r.Content, '<a title="([^"]+)" href="(magnet:[^"]+)"')
-if ($rows.Count -eq 0) { "no results"; exit }
+if ($rows.Count -eq 0) { if (-not $Json) { "no results" }; exit }
 
 $results = @()
 foreach ($row in $rows) {
@@ -29,6 +30,12 @@ foreach ($row in $rows) {
     $results += [pscustomobject]@{ Name = $name; Magnet = $row.Groups[2].Value }
 }
 $results = @($results | Group-Object Name | ForEach-Object { $_.Group[0] }) | Select-Object -First $Max
+if ($Json) {
+    foreach ($res in $results) {
+        [pscustomobject]@{ source = 'knaben.org'; name = $res.Name; seeds = 0; size = ''; magnet = $res.Magnet; detail = '' } | ConvertTo-Json -Compress
+    }
+    exit 0
+}
 "[$($results.Count) results for '$Query' (seeds unknown - aggregator)]"
 $i = 0
 foreach ($res in $results) {
@@ -37,7 +44,7 @@ foreach ($res in $results) {
 }
 
 if ($Add -and $results.Count -gt 0) {
-    $add = "$env:USERPROFILE\Downloads\automata\qbittorrent.com\add-torrent.ps1"
+    $add = "$PSScriptRoot\..\qbittorrent.com\add-torrent.ps1"
     $choice = if ($results.Count -eq 1) { 0 } else {
         $n = Read-Host "which one to add (1-$($results.Count), 0 = none)"
         [int]$n - 1

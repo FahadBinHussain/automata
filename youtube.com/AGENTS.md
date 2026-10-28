@@ -12,7 +12,7 @@
 
 ## Notifications
 
-- Notifier: `tools\codex_notify.mjs` (this workspace) → Murmur's queued `/api/automation/notifications` endpoint for the messenger thread configured in `youtube.com-stream-watch-codex-automation.config.json` (gitignored; the thread id is personal — never commit it).
+- Notifier: `youtube.com\codex-notify.mjs` (this workspace) → Murmur's queued `/api/automation/notifications` endpoint for the messenger thread configured in `youtube.com-stream-watch-codex-automation.config.json` (gitignored; the thread id is personal — never commit it).
 - When Murmur runs on a private HF Space, set `CODEX_NOTIFY_HF_PROFILE` to the owning mainframe HF account email so the notifier reads the HF token at runtime and sends `X-HF-Authorization`.
 - If Murmur/env is unavailable, keep messages queued for later flush instead of dropping them.
 

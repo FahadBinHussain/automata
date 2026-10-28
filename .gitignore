@@ -17,8 +17,8 @@ Desktop.ini
 youtube.com/youtube.com-stream-watch-codex-automation.config.json
 
 # Build artifacts (embeds machine build paths - rebuild from source)
-tools/socks5-proxy/*.exe
-tools/window-capture/*.exe
+socks5-proxy/*.exe
+window-capture/*.exe
 
 # Dependency folders
 **/node_modules/
@@ -41,9 +41,8 @@ tools/window-capture/*.exe
 # IDE folders
 .vscode/
 .idea/
-tools/agents-sync/last-sync-content.txt
-tools/agents-sync/last-popup.txt
-tools/agents-sync/agent-rules-sync.ps1.bak-20260615
+last-sync-content.txt
+agent-rules-sync.log
 
 # tool build backups
 *.exe~

@@ -12,7 +12,7 @@ udrop (https://www.udrop.com) is a backup source alongside TeraBox.
 - `UdropCrypt` — crypt wrapping `udrop:` (filename_encryption standard, dir name encryption on). Same layout as the TeraBox bridge so both sources mount/look identical.
 
 ## mirror workflow (standardized)
-see `automata\tools\storage-mirror.ps1` for the cross-source sync helper. it copies from a
+see `automata-private\udrop.com\storage-mirror.ps1` for the cross-source sync helper. it copies from a
 `*Crypt:` source to a `*Crypt:` dest, serial transfers (`--transfers 1`) because parallel
 reads wedge the AList Terabox driver, and reports per-source file counts.
 

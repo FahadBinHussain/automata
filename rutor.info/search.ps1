@@ -14,7 +14,8 @@ param(
     [switch]$Add,
     [switch]$Paused,
     [int]$MinSeeds = 1,
-    [int]$Max = 10
+    [int]$Max = 10,
+    [switch]$Json
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -40,6 +41,12 @@ foreach ($tr in $trs) {
 }
 
 $results = $results | Where-Object { $_.Seeds -ge $MinSeeds } | Sort-Object Seeds -Descending | Select-Object -First $Max
+if ($Json) {
+    foreach ($res in $results) {
+        [pscustomobject]@{ source = 'rutor.info'; name = $res.Name; seeds = $res.Seeds; size = $res.Size; magnet = $res.Magnet; detail = '' } | ConvertTo-Json -Compress
+    }
+    exit 0
+}
 "[$($results.Count) results for '$Query']"
 $i = 0
 foreach ($res in $results) {
@@ -48,7 +55,7 @@ foreach ($res in $results) {
 }
 
 if ($Add -and $results.Count -gt 0) {
-    $add = "$env:USERPROFILE\Downloads\automata\qbittorrent.com\add-torrent.ps1"
+    $add = "$PSScriptRoot\..\qbittorrent.com\add-torrent.ps1"
     $choice = if ($results.Count -eq 1) { 0 } else {
         $n = Read-Host "which one to add (1-$($results.Count), 0 = none)"
         [int]$n - 1

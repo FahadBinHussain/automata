@@ -110,10 +110,10 @@ When the project is a single-file userscript, after every update: use browser-us
 - **AList restart**: `Stop-Process -Name alist; Start-Process pwsh -ArgumentList "-NoExit","-Command","& '$env:USERPROFILE\scoop\apps\alist\current\alist.exe' server --data '$env:USERPROFILE\scoop\persist\alist\data'"`
 - **AList API token**: login at localhost:5244/api/auth/login with admin/pass, store in `$env:TEMP\alist-token.txt`.
 
-## udrop second backup source + standardized multi-source mirror (udrop.com\ + tools\storage-mirror.ps1)
+## udrop second backup source + standardized multi-source mirror (udrop.com\ + udrop.com\storage-mirror.ps1)
 - udrop (https://www.udrop.com) is a backup source alongside TeraBox. full details in `udrop.com\AGENTS.md`.
 - **rclone remotes**: `udrop` (webdav @ https://www.udrop.com/webdav/, login user/pass from vault item `udrop.com`) + `UdropCrypt` (crypt wrapping `udrop:`). WebDAV is still live even though udrop's settings page hides the section; auth = login username + password.
-- **mirror tool**: `tools\storage-mirror.ps1` — the standardized cross-source sync. usage: `.\storage-mirror.ps1 -Source TeraboxCrypt -Dest UdropCrypt` (add more `-Dest` remotes for future sources; `-VerifyOnly` compares, `-IncludeDeleted` makes it a true mirror). serial transfers by default (TeraBox/AList wedge otherwise). reports per-source file counts.
+- **mirror tool**: `udrop.com\storage-mirror.ps1` — the standardized cross-source sync. usage: `.\storage-mirror.ps1 -Source TeraboxCrypt -Dest UdropCrypt` (add more `-Dest` remotes for future sources; `-VerifyOnly` compares, `-IncludeDeleted` makes it a true mirror). serial transfers by default (TeraBox/AList wedge otherwise). reports per-source file counts.
 - **vault**: `udrop.com` item holds login creds + the `[rclone UdropCrypt keys]` in notes. keep both in sync if remotes are ever recreated.
 
 ## ditto fork build + patcher (github.com\sabrogden\Ditto\ditto-fork-build.ps1)

@@ -12,13 +12,37 @@ if (!(Test-Path $sessionFile)) {
     exit 1
 }
 
-$sessionKey = Get-Content $sessionFile -Raw
+$fileInfo = Get-Item -LiteralPath $sessionFile
+$age = (Get-Date) - $fileInfo.LastWriteTime
+if ($age.TotalMinutes -ge 60) {
+    Remove-Item $sessionFile -Force -ErrorAction SilentlyContinue
+    bw lock 2>$null | Out-Null
+    Write-Host "SESSION_EXPIRED"
+    exit 1
+}
+
+$sessionKey = (Get-Content $sessionFile -Raw).Trim()
 
 # Test if session is still valid
 $env:BW_SESSION = $sessionKey
-$status = bw status 2>&1 | ConvertFrom-Json
+try {
+    $rawStatus = bw status --session $sessionKey 2>$null
+    if ($rawStatus) {
+        $status = $rawStatus | ConvertFrom-Json
+        if ($status.status -eq "unlocked") {
+            Write-Output $sessionKey
+            exit 0
+        } elseif ($status.status -in @("locked", "unauthenticated")) {
+            Remove-Item $sessionFile -Force -ErrorAction SilentlyContinue
+            Write-Host "SESSION_EXPIRED"
+            exit 1
+        }
+    }
+} catch {}
 
-if ($status.status -eq "unlocked") {
+# If status check had a transient error (e.g. concurrent lock on data.json)
+# and the session file is well within its 60m TTL, preserve it
+if ($age.TotalMinutes -lt 60) {
     Write-Output $sessionKey
     exit 0
 } else {

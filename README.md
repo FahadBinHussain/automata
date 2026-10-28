@@ -4,9 +4,9 @@ A collection of browser userscripts, bookmarklets, and small automation utilitie
 
 ## Structure
 
-- `tools/git/` - repo utilities (includes `git-streak.ps1`).
-- `tools/codex/` - local Codex Desktop repair utilities (includes `Move-CodexThread.ps1`).
-- `tools/misc-bookmarklets/` - generic bookmarklets and cross-site utilities.
+- `git-scm.com/` - local git streak/heatmap utility (`streak.ps1`).
+- `openai.com/codex/` - local Codex Desktop repair utilities (includes `Move-CodexThread.ps1`).
+- `bookmarklets/` - generic bookmarklets and cross-site utilities.
 - `files.vc/` - service-specific files.vc uploader utility.
 - `<domain>/` folders (for example `google.com/`, `youtube.com/`) - scripts tailored for that site.
 
@@ -22,13 +22,13 @@ A collection of browser userscripts, bookmarklets, and small automation utilitie
 
 ```powershell
 # Run interactively (choose roots)
-powershell -ExecutionPolicy Bypass -File .\tools\git\git-streak.ps1
+powershell -ExecutionPolicy Bypass -File .\git-scm.com\streak.ps1
 
 # Generate HTML heatmap report
-powershell -ExecutionPolicy Bypass -File .\tools\git\git-streak.ps1 -Gui -OpenGui
+powershell -ExecutionPolicy Bypass -File .\git-scm.com\streak.ps1 -Gui -OpenGui
 
 # Scan specific roots
-powershell -ExecutionPolicy Bypass -File .\tools\git\git-streak.ps1 -Roots "$HOME\Downloads","$HOME\Documents"
+powershell -ExecutionPolicy Bypass -File .\git-scm.com\streak.ps1 -Roots "$HOME\Downloads","$HOME\Documents"
 ```
 
 ## Conventions

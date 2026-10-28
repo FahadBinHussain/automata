@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const rawArgs = process.argv.slice(2);
 if (rawArgs[0] === '--') rawArgs.shift();
@@ -33,7 +34,7 @@ const defaults = {
     '\\bbuild(ing)?\\b.*\\b(app|site|bot|tool)\\b',
   ],
   adultTitlePatterns: ['\\bCarnal Instinct\\b', '\\bNSFW\\b', '\\b18\\+\\b', '\\badult\\b'],
-  genericTitlePatterns: ['^This game is PEAK!?$', '^Watch me have some fun', '^Live Stream$', '^Untitled$'],
+  genericTitlePatterns: ['^This game is PEAK!?$', '^Watch me have some fun', '^Live Stream$', '^Untitled$', '^obs$'],
   keepPrivateVideoIds: [],
 };
 
@@ -355,8 +356,10 @@ function notificationMessage(report) {
 }
 
 function sendNotification(message, dedupeKey) {
+  // lives beside this file since the local murmur clone was deleted (2026-10-09)
+  const notifierPath = fileURLToPath(new URL('./codex-notify.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [
-    'tools/codex_notify.mjs',
+    notifierPath,
     'send',
     '--source',
     'youtube-stream-watch',
