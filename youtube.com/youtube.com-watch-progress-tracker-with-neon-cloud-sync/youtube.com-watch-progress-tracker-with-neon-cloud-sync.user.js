@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Progress + Visited Tracks (YouTube / Spotify / SoundCloud - Neon sync)
 // @namespace    https://github.com/anomalyco/automata
-// @version      0.7.10
+// @version      0.8.3
 // @description  Tracks watch progress on YouTube (floating panel + thumbnail bars) and clicked track history on Spotify/SoundCloud/YouTube Music (YouTube search buttons), all synced to one Neon Postgres database.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -176,6 +176,73 @@
 	// =====================================================================
 	if (IS_YT) {
 
+	// =====================================================================
+	// sign-in gate (0.8.0)
+	// =====================================================================
+	// When YouTube is signed out - or when we simply cannot TELL - nothing new
+	// may be recorded, persisted or pushed. Stored progress still DISPLAYS,
+	// because pulling and painting are reads, not tracking.
+	// An unknown state is LOUD; it is never a silent "assume ok".
+	let signState = "unknown"; // "in" | "out" | "unknown"
+	let uiReady = false; // panel + banner exist yet?
+	const gateLogged = new Set(); // which gated fns already logged this state
+
+	function readSignedIn() {
+		// 1) YouTube's own config flag - authoritative when it is a boolean.
+		try {
+			const c = typeof ytcfg !== "undefined" && ytcfg.get ? ytcfg.get("LOGGED_IN") : null;
+			if (c === true) return "in";
+			if (c === false) return "out";
+		} catch (e) {}
+
+		// 2) An explicit "Sign in" link in the masthead/guide = signed out.
+		try {
+			const a = document.querySelector(
+				'#masthead a[href*="accounts.google.com/ServiceLogin"], #masthead a[href*="signin"], #guide a[href*="ServiceLogin"]'
+			);
+			const txt = ((a && a.textContent) || "").trim();
+			if (a && /sign in/i.test(txt)) return "out";
+		} catch (e) {}
+
+		// 3) A Google-hosted avatar = signed in.
+		try {
+			const img = document.querySelector("#masthead img#img, #avatar-btn img, ytd-mini-guide img");
+			const src = (img && (img.src || img.getAttribute("src"))) || "";
+			if (/googleusercontent|ggpht/i.test(src)) return "in";
+		} catch (e) {}
+
+		// 4) Weak signal, checked LAST so it can never override the above.
+		try {
+			if (/(^|;\s*)LOGIN_INFO=/.test(document.cookie)) return "in";
+		} catch (e) {}
+
+		return "unknown";
+	}
+
+	function refreshSignState(why) {
+		const next = readSignedIn();
+		if (next !== signState) {
+			log(`sign-in state ${signState} -> ${next} (${why || "?"})`);
+			signState = next;
+			gateLogged.clear();
+			applySignUI();
+		}
+		return signState;
+	}
+
+	// Returns true only when tracking is permitted. Otherwise it logs ONCE per
+	// gated function (not per tick) and returns false, so callers can bail.
+	function trackingAllowed(who) {
+		if (signState === "in") return true;
+		if (!gateLogged.has(who)) {
+			gateLogged.add(who);
+			log(
+				`tracking PAUSED in ${who}: sign-in state "${signState}" - showing stored progress, recording nothing new`
+			);
+		}
+		return false;
+	}
+
 	const SQL_UPSERT = `
 insert into watch_progress (video_id, title, channel, position, duration, finished, updated_at)
 values ($1, $2, $3, $4, $5, $6, coalesce($7::timestamptz, now()))
@@ -202,6 +269,7 @@ on conflict (video_id) do update set
   updated_at = coalesce($7::timestamptz, now())`;
 
 	async function flush() {
+		if (!trackingAllowed("flush")) return 0;
 		if (!connStr() || dirty.size === 0) return 0;
 		const ids = [...dirty];
 		let ok = 0;
@@ -256,11 +324,28 @@ on conflict (video_id) do update set
 		return false;
 	}
 
-	async function pull() {
+	async function pull(opts = {}) {
 		if (!connStr()) throw new Error(NO_CONN_MSG);
-		const rows = await neonQuery(
-			"select video_id, title, channel, position, duration, finished, updated_at from watch_progress order by updated_at desc limit 200"
-		);
+		const full = !!opts.full || Object.keys(cache).length === 0;
+		let query = "select video_id, title, channel, position, duration, finished, updated_at from watch_progress order by updated_at desc";
+		let params = [];
+
+		if (!full) {
+			// Incremental sync: only fetch rows updated after the newest record in our local cache.
+			// Subtract 60s for clock skew / commit jitter across devices.
+			let maxTs = 0;
+			for (const id in cache) {
+				const t = ts(cache[id].updatedAt);
+				if (t > maxTs) maxTs = t;
+			}
+			if (maxTs > 0) {
+				const since = new Date(Math.max(0, maxTs - 60000)).toISOString();
+				query = "select video_id, title, channel, position, duration, finished, updated_at from watch_progress where updated_at > $1 order by updated_at desc";
+				params = [since];
+			}
+		}
+
+		const rows = await neonQuery(query, params);
 		for (const r of rows) {
 			const id = r.video_id;
 			const remote = {
@@ -346,8 +431,10 @@ on conflict (video_id) do update set
 				cache[id] = merged;
 			}
 		}
-		saveCache();
-		renderList();
+		if (rows.length > 0) {
+			saveCache();
+			renderList();
+		}
 		return rows.length;
 	}
 
@@ -358,33 +445,49 @@ on conflict (video_id) do update set
 	let retryTimer = null;
 
 	function schedulePush() {
+		if (!trackingAllowed("schedulePush")) return;
 		if (!connStr()) return;
 		clearTimeout(pushTimer);
 		pushTimer = setTimeout(() => autoSync("progress"), PUSH_DEBOUNCE_MS);
 	}
 
-	async function autoSync(reason) {
+	async function autoSync(reason, opts = {}) {
 		if (!connStr() || syncing) return;
+		// Signed out: push half is paused (record + flush), pull still runs so
+		// the stored progress keeps displaying.
+		const track = trackingAllowed("autoSync");
 		syncing = true;
 		syncState("busy");
 		try {
-			record(true, "autosync");
+			if (track) record(true, "autosync");
 			// Only the pending dirt rows go up. Sweeping the whole cache into the
 			// queue each time turned every 5s debounce into a re-upload of all
 			// videos, which tripped neon's rate limit and made flushes fail.
 			const pushing = dirty.size;
 			const ok = await flush();
-			if (dirty.size) {
+			if (track && dirty.size) {
 				clearTimeout(retryTimer);
 				retryTimer = setTimeout(() => autoSync("retry"), RETRY_MS);
 				throw new Error(
 					`${dirty.size} of ${pushing} rows failed to upload (${ok} ok), retrying in ${RETRY_MS / 1000}s`
 				);
 			}
-			const pulled = await pull();
+
+			// Do NOT pull during regular playback progress flushes or teardown (hidden/unload).
+			// Only pull remote updates on interval ticks, tab focus, or explicit manual sync.
+			let pulled = 0;
+			if (reason === "tick" || reason === "focus" || reason === "manual") {
+				pulled = await pull({ full: !!opts.full });
+			}
+
 			syncState("ok");
-			status(`synced - pushed ${ok}, ${pulled} rows in neon`);
-			log(`autosync ${reason}: pushed ${ok}, pulled ${pulled} rows`);
+			if (track) {
+				status(`synced - pushed ${ok}, ${pulled} new rows from neon`);
+				log(`autosync ${reason}: pushed ${ok}, pulled ${pulled} new rows`);
+			} else {
+				status(`tracking paused (${signState}) - pulled ${pulled} new rows, nothing recorded`);
+				log(`autosync ${reason}: tracking paused (${signState}); pulled ${pulled} new rows (display only)`);
+			}
 		} catch (e) {
 			syncState("fail");
 			status(`sync failed - ${e.message}`);
@@ -411,6 +514,7 @@ on conflict (video_id) do update set
 	}
 
 	function record(force, why, atSeekEnd) {
+		if (!trackingAllowed("record")) return;
 		const v = bound;
 		const id = videoId();
 		if (!v || !id || !v.duration || Number.isNaN(v.duration)) return;
@@ -678,6 +782,76 @@ yt-image:hover .ytp-thumb-bar{display:block!important;opacity:1!important;visibi
 	document.addEventListener("yt-navigate-finish", syncBtnLabel);
 	syncBtnLabel();
 
+	// Sign-in banner. Built with real DOM nodes for the same Trusted Types
+	// reason as everything else below. uiReady() is the gate that keeps
+	// applySignUI from touching the DOM before this block has run once.
+	const SIGN_BANNER_ID = "ytp-sign";
+	function ensureSignBanner() {
+		let b = document.getElementById(SIGN_BANNER_ID);
+		if (b) return b;
+		b = el("div", {
+			id: SIGN_BANNER_ID,
+			style: [
+				"display: none",
+				"position: fixed",
+				"top: 8px",
+				"left: 50%",
+				"transform: translateX(-50%)",
+				"z-index: 2147483646",
+				"padding: 8px 16px",
+				"border-radius: 8px",
+				"font: 600 13px/1.45 Roboto, Arial, sans-serif",
+				"color: #fff",
+				"box-shadow: 0 4px 18px rgba(0,0,0,.45)",
+				"max-width: 90vw",
+				"text-align: " + "center",
+			].join(";"),
+		});
+		(document.body || document.documentElement).appendChild(b);
+		return b;
+	}
+	function applySignUI() {
+		if (!uiReady) return; // panel not built yet; the first refresh after
+		// init re-runs this, so nothing is lost by waiting.
+		const b = ensureSignBanner();
+		if (signState === "in") {
+			b.style.display = "none";
+			btn.style.outline = "";
+			btn.removeAttribute("data-sign");
+			return;
+		}
+		const out = signState === "out";
+		b.textContent = out
+			? "Signed out of YouTube - watch progress is NOT being recorded or synced. Stored progress still shows. Sign in to resume tracking."
+			: "YouTube sign-in state UNKNOWN - tracking paused to avoid bogus progress. Sign in (or reload) to resume.";
+		b.style.background = out ? "#c62828" : "#b26a00";
+		// While a video covers the top of the page (fullscreen/theater/F11)
+		// hide the banner + outline. Display-only: the gate and data-sign
+		// attribute still say tracking is off; this restores on exit.
+		const covered = videoCoversTop();
+		b.style.display = covered ? "none" : "block";
+		btn.style.outline = covered ? "none" : (out ? "2px solid #ff5252" : "2px solid #ffb300");
+		btn.setAttribute("data-sign", signState);
+	}
+	uiReady = true;
+
+	// True while a video covers the top of the page: native fullscreen,
+	// the player's own fullscreen class, theater/full-bleed layout, or F11.
+	// The sign banner must not shout over the video - display only, the
+	// gate below keeps enforcing tracking state the whole time.
+	const videoCoversTop = () =>
+		!!document.fullscreenElement ||
+		!!document.querySelector("#movie_player.ytp-fullscreen") ||
+		!!document.querySelector("ytd-watch-flexy[theater], ytd-watch-flexy[full-bleed]") ||
+		window.innerHeight >= screen.height;
+
+	// applySignUI() only runs on a state CHANGE (the 5s interval), so this
+	// wrapper re-asks the display question on fullscreen/theater/navigate
+	// events without touching tracking state.
+	const reapplySignUI = () => {
+		if (uiReady) applySignUI();
+	};
+
 	// NOTE: YouTube enforces Trusted Types, so innerHTML is blocked on this
 	// document. Everything below is built with real DOM nodes on purpose.
 	// Do not "simplify" this back into innerHTML or the panel stops rendering.
@@ -686,12 +860,45 @@ yt-image:hover .ytp-thumb-bar{display:block!important;opacity:1!important;visibi
 		for (const [k, v] of Object.entries(props)) {
 			if (k === "class") n.className = v;
 			else if (k === "text") n.textContent = v;
-			else if (k === "style") Object.assign(n.style, v);
+			// `style` may arrive as a CSS string or as an object. Assigning a
+			// STRING through Object.assign enumerates its indexed characters
+			// ("0": "d", "1": "i", ...) and dies with "Indexed property setter is
+			// not supported." on CSSStyleDeclaration - that throw aborted the
+			// whole script at init (no launcher button, no panel). Strings go
+			// through cssText instead.
+			else if (k === "style") {
+				if (typeof v === "string") n.style.cssText = v;
+				else Object.assign(n.style, v);
+			}
 			else n.setAttribute(k, v);
 		}
 		for (const c of kids) if (c) n.append(c);
 		return n;
 	};
+
+	// Initial probe + re-check wiring. This block deliberately sits AFTER the
+	// el() helper above: refreshSignState("init") runs synchronously and a
+	// state change calls applySignUI() -> ensureSignBanner(), which builds the
+	// banner through el() - running it any earlier throws a TDZ
+	// ReferenceError (const el is not hoisted) and kills the whole script.
+	// The interval is deliberately plain and short: sign-in can flip at any
+	// moment (account switch, session expiry, incognito window), and every
+	// entry point below re-reads `signState` live, so a stale value only
+	// delays the gate by one tick.
+	refreshSignState("init");
+	applySignUI();
+	setInterval(() => { refreshSignState("interval"); reapplySignUI(); }, 5000);
+	document.addEventListener("yt-navigate-finish", () => { refreshSignState("navigate"); reapplySignUI(); });
+	document.addEventListener("visibilitychange", () => {
+		if (!document.hidden) { refreshSignState("visible"); reapplySignUI(); }
+	});
+	// Display-only re-apply: the banner hides while a video covers the top
+	// of the page (fullscreen/theater/F11) and restores on exit.
+	document.addEventListener("fullscreenchange", reapplySignUI);
+	document.addEventListener("webkitfullscreenchange", reapplySignUI);
+	new MutationObserver(reapplySignUI).observe(document.documentElement, {
+		attributes: true, subtree: true, attributeFilter: ["theater", "full-bleed"],
+	});
 
 	const panel = el("div", { id: "ytp-panel" });
 
@@ -946,27 +1153,30 @@ on conflict (key) do update set
 		}
 	};
 
-	panel.querySelector('[data-a="sync"]').onclick = async () => {
+	panel.querySelector('[data-a="sync"]').onclick = async (e) => {
 		if (!connStr()) {
 			status("no neon connection string - fill it in settings first");
 			return;
 		}
 		status("syncing...");
-		await autoSync("manual");
+		await autoSync("manual", { full: !!(e && e.shiftKey) });
 	};
 
-	// updatedAt reaches the cache in two shapes: record() writes a UTC ISO string
-	// ending in Z, while Neon returns "2026-08-04 09:12:33.123456" with no zone.
-	// new Date() reads that naive form as local time, so pulled rows were skewed by
-	// the local UTC offset and interleaved wrongly with locally recorded ones.
+	// updatedAt reaches the cache in several shapes: record() writes a UTC ISO
+	// string ending in Z, while Neon/Postgres can return
+	// "2026-08-04 09:12:33.123456", "...+00", or "...+00:00". Treat a missing
+	// zone as UTC and normalize the short Postgres +00 form before Date.parse().
+	// Otherwise a remote timestamp becomes NaN/0, the local stale row always wins,
+	// and an old progress value appears to come back after sync.
 	// Normalize to epoch ms, treating a missing zone as UTC, and treat unparseable
 	// values as oldest rather than NaN (NaN comparisons leave order untouched,
 	// which is what pinned stale rows at the top).
 	function ts(v) {
 		if (!v) return 0;
 		if (typeof v === "number") return v;
-		let s = String(v).trim();
-		if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) s = s.replace(" ", "T") + "Z";
+		let s = String(v).trim().replace(" ", "T");
+		if (/[+-]\d{2}$/.test(s)) s += ":00";
+		if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) s += "Z";
 		const n = Date.parse(s);
 		return Number.isFinite(n) ? n : 0;
 	}
