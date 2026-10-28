@@ -45,5 +45,5 @@ powershell -ExecutionPolicy Bypass -File .\git-scm.com\streak.ps1 -Roots "$HOME\
 ## Contributors
 
 <a href="https://github.com/FahadBinHussain/automata/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=FahadBinHussain/automata" alt="Contributors" />
+  <img src="https://contrib.rocks/image?repo=FahadBinHussain/automata&max=1" alt="Contributors" />
 </a>
