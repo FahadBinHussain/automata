@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.3
+// @version      18.4
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube (history, playlists, home, search, subs).
@@ -59,6 +59,14 @@
             outline-offset:3px!important; border-radius:6px!important;
             background:rgba(255,179,0,.12)!important;
         }
+        /* v18.4: duplicates are 100% watched too, so their content dims like
+           any watched card - but the dim lives on the children, not the card.
+           Dimming the card would wash out the amber outline + DUPLICATE badge
+           (both paint with the card); the children carry the thumbnail, title
+           and metadata, so they take the .45 dim / .75 hover instead. */
+        .userscript-duplicate-watched > * { opacity:.45!important; transition:opacity .2s ease!important; }
+        .userscript-duplicate-watched:hover { opacity:1!important; }
+        .userscript-duplicate-watched:hover > * { opacity:.75!important; }
         .userscript-duplicate-watched::before {
             content:'DUPLICATE · 100% WATCHED'; display:inline-block; position:relative;
             z-index:2; margin:4px; padding:4px 8px; border-radius:3px;
@@ -114,8 +122,8 @@
     // YouTube nests card renderers (ytd-rich-item-renderer wraps yt-lockup-view-
     // model on channel/home/search pages), so one thumbnail can match CARD_SELECTOR
     // twice with the same video id. That doubled every mark (dim applied twice,
-    // false "duplicate" on a single thumbnail, and the duplicate's opacity:1!
-    // killed the dim). Only the OUTERMOST matched card per thumbnail should count.
+    // false "duplicate" on a single thumbnail). Only the OUTERMOST matched card
+    // per thumbnail should count.
     function isNestedCard(card) {
         return !!(card.parentElement && card.parentElement.closest(CARD_SELECTOR));
     }
