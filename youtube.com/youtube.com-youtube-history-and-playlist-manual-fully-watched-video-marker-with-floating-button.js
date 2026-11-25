@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.6
+// @version      18.7
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube. Gear button opens settings: duplicate check on/off, watched opacity slider (0-100).
@@ -90,7 +90,12 @@
            (gear button, bottom-right) sets --userscript-watched-opacity
            0-100; it drives the card dim, duplicate content, outline alpha
            and badge alpha together. Hover always reveals at .75 minimum,
-           so a card dimmed to 0 still shows on hover. */
+           so a card dimmed to 0 still shows on hover.
+           v18.7: the panel was built with innerHTML - YouTube enforces
+           Trusted Types, so that assignment throws and the panel never
+           appeared (gear button worked, panel didn't). The panel is now
+           built with createElement/textContent like the nav widget.
+           Never use innerHTML in a YouTube userscript. */
         .userscript-duplicate-watched > * { opacity:var(--userscript-watched-opacity)!important; transition:opacity .2s ease!important; }
         .userscript-duplicate-watched:hover { opacity:1!important; outline-color:rgba(255,179,0,max(var(--userscript-watched-opacity),.75))!important; }
         .userscript-duplicate-watched:hover > * { opacity:max(var(--userscript-watched-opacity),.75)!important; }
@@ -423,15 +428,45 @@
         if (!document.getElementById('yt-marker-settings')) {
             const panel = document.createElement('div');
             panel.id = 'yt-marker-settings';
-            panel.innerHTML = `<div class="yt-marker-settings-title">marker settings<button type="button" id="yt-marker-settings-close" title="Close">\u2715</button></div><label class="yt-marker-settings-row"><span>duplicate check</span><input type="checkbox" id="yt-marker-dup-toggle"${dupCheckEnabled ? ' checked' : ''}></label><div class="yt-marker-settings-row"><span>watched opacity</span><span id="yt-marker-opacity-value">${watchedOpacityPct}%</span></div><input type="range" id="yt-marker-opacity-slider" min="0" max="100" step="1" value="${watchedOpacityPct}">`;
-            document.body.appendChild(panel);
-            panel.querySelector('#yt-marker-settings-close').addEventListener('click', toggleSettingsPanel);
-            panel.querySelector('#yt-marker-dup-toggle').addEventListener('change', (e) => {
+            const title = document.createElement('div');
+            title.className = 'yt-marker-settings-title';
+            title.textContent = 'marker settings';
+            const close = document.createElement('button');
+            close.id = 'yt-marker-settings-close';
+            close.type = 'button';
+            close.title = 'Close';
+            close.textContent = '\u2715';
+            close.addEventListener('click', toggleSettingsPanel);
+            title.appendChild(close);
+            const dupRow = document.createElement('label');
+            dupRow.className = 'yt-marker-settings-row';
+            const dupLabel = document.createElement('span');
+            dupLabel.textContent = 'duplicate check';
+            const toggle = document.createElement('input');
+            toggle.id = 'yt-marker-dup-toggle';
+            toggle.type = 'checkbox';
+            toggle.checked = dupCheckEnabled;
+            toggle.addEventListener('change', (e) => {
                 dupCheckEnabled = e.target.checked;
                 GM_setValue(SETTINGS_KEY_DUP, dupCheckEnabled);
                 scheduleScan();
             });
-            const slider = panel.querySelector('#yt-marker-opacity-slider');
+            dupRow.append(dupLabel, toggle);
+            const opRow = document.createElement('div');
+            opRow.className = 'yt-marker-settings-row';
+            const opLabel = document.createElement('span');
+            opLabel.textContent = 'watched opacity';
+            const opValue = document.createElement('span');
+            opValue.id = 'yt-marker-opacity-value';
+            opValue.textContent = watchedOpacityPct + '%';
+            opRow.append(opLabel, opValue);
+            const slider = document.createElement('input');
+            slider.id = 'yt-marker-opacity-slider';
+            slider.type = 'range';
+            slider.min = '0';
+            slider.max = '100';
+            slider.step = '1';
+            slider.value = String(watchedOpacityPct);
             slider.addEventListener('input', () => {
                 watchedOpacityPct = Number(slider.value);
                 applyWatchedOpacity();
@@ -439,6 +474,8 @@
             slider.addEventListener('change', () => {
                 GM_setValue(SETTINGS_KEY_OPACITY, watchedOpacityPct);
             });
+            panel.append(title, dupRow, opRow, slider);
+            document.body.appendChild(panel);
         }
         scheduleScan();
     }
