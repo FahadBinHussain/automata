@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.4
+// @version      18.5
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube (history, playlists, home, search, subs).
@@ -55,7 +55,7 @@
             z-index:10000!important; pointer-events:none!important;
         }
         .userscript-duplicate-watched {
-            opacity:1!important; outline:4px solid #ffb300!important;
+            opacity:1!important; outline:4px solid rgba(255,179,0,.45)!important;
             outline-offset:3px!important; border-radius:6px!important;
             background:rgba(255,179,0,.12)!important;
         }
@@ -63,9 +63,12 @@
            any watched card - but the dim lives on the children, not the card.
            Dimming the card would wash out the amber outline + DUPLICATE badge
            (both paint with the card); the children carry the thumbnail, title
-           and metadata, so they take the .45 dim / .75 hover instead. */
+           and metadata, so they take the .45 dim / .75 hover instead.
+           v18.5: the outline is dimmed too (rgba .45, .75 on hover) - the
+           full-strength amber border was louder than the dimmed card. The
+           DUPLICATE badge stays full-strength so it stays readable. */
         .userscript-duplicate-watched > * { opacity:.45!important; transition:opacity .2s ease!important; }
-        .userscript-duplicate-watched:hover { opacity:1!important; }
+        .userscript-duplicate-watched:hover { opacity:1!important; outline-color:rgba(255,179,0,.75)!important; }
         .userscript-duplicate-watched:hover > * { opacity:.75!important; }
         .userscript-duplicate-watched::before {
             content:'DUPLICATE · 100% WATCHED'; display:inline-block; position:relative;
@@ -74,6 +77,9 @@
         }
         .userscript-duplicate-current {
             outline-color:#00e5ff!important; box-shadow:0 0 0 6px rgba(0,229,255,.3)!important;
+        }
+        .userscript-duplicate-watched.userscript-duplicate-current:hover {
+            outline-color:#00e5ff!important;
         }
         #yt-duplicate-nav {
             position:fixed; right:30px; bottom:92px; z-index:99999; display:none;
