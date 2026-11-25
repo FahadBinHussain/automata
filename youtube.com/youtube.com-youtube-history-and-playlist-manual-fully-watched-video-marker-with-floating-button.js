@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.5
+// @version      18.6
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
-// @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube (history, playlists, home, search, subs).
+// @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube. Gear button opens settings: duplicate check on/off, watched opacity slider (0-100).
 // @author       Fahad
 // @match        https://www.youtube.com/*
 // @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
 // ==/UserScript==
 
 (function() {
@@ -27,10 +29,28 @@
     // tracker builds rounded 99.95% up to a 100% wide bar. When our tracker
     // has data for a video, it wins over YouTube's native bars.
     const CUSTOM_BAR_SELECTOR = '.ytp-thumb-bar';
+    // v18.6 settings (GM storage = per-script, so global across YouTube pages):
+    // duplicate check on/off + watched opacity 0-100 (default 45). The opacity
+    // drives one CSS var that dims the watched cards, the duplicate content,
+    // the amber outline and the DUPLICATE badge together - no more hardcoding.
+    const SETTINGS_KEY_DUP = 'dup-check-enabled';
+    const SETTINGS_KEY_OPACITY = 'watched-opacity';
+    let dupCheckEnabled = GM_getValue(SETTINGS_KEY_DUP, true) !== false;
+    let watchedOpacityPct = Number(GM_getValue(SETTINGS_KEY_OPACITY, 45));
+    if (!Number.isFinite(watchedOpacityPct)) watchedOpacityPct = 45;
+    watchedOpacityPct = Math.min(100, Math.max(0, Math.round(watchedOpacityPct)));
+    const watchedOpacityVar = (watchedOpacityPct / 100).toString();
+
+    function applyWatchedOpacity() {
+        document.documentElement.style.setProperty('--userscript-watched-opacity', (watchedOpacityPct / 100).toString());
+        const label = document.getElementById('yt-marker-opacity-value');
+        if (label) label.textContent = watchedOpacityPct + '%';
+    }
 
     const css = `
-        .userscript-watched-dimmed { opacity:.45!important; transition:opacity .2s ease!important; }
-        .userscript-watched-dimmed:hover { opacity:.75!important; }
+        :root { --userscript-watched-opacity:${watchedOpacityVar}; }
+        .userscript-watched-dimmed { opacity:var(--userscript-watched-opacity)!important; transition:opacity .2s ease!important; }
+        .userscript-watched-dimmed:hover { opacity:max(var(--userscript-watched-opacity),.75)!important; }
         .userscript-watched-dimmed yt-thumbnail-overlay-progress-bar-view-model,
         .userscript-watched-dimmed yt-thumbnail-overlay-progress-bar-view-model *,
         .userscript-watched-dimmed ytd-thumbnail-overlay-resume-playback-renderer,
@@ -55,7 +75,7 @@
             z-index:10000!important; pointer-events:none!important;
         }
         .userscript-duplicate-watched {
-            opacity:1!important; outline:4px solid rgba(255,179,0,.45)!important;
+            opacity:1!important; outline:4px solid rgba(255,179,0,var(--userscript-watched-opacity))!important;
             outline-offset:3px!important; border-radius:6px!important;
             background:rgba(255,179,0,.12)!important;
         }
@@ -65,16 +85,21 @@
            (both paint with the card); the children carry the thumbnail, title
            and metadata, so they take the .45 dim / .75 hover instead.
            v18.5: the outline is dimmed too (rgba .45, .75 on hover) - the
-           full-strength amber border was louder than the dimmed card. The
-           DUPLICATE badge stays full-strength so it stays readable. */
-        .userscript-duplicate-watched > * { opacity:.45!important; transition:opacity .2s ease!important; }
-        .userscript-duplicate-watched:hover { opacity:1!important; outline-color:rgba(255,179,0,.75)!important; }
-        .userscript-duplicate-watched:hover > * { opacity:.75!important; }
+           full-strength amber border was louder than the dimmed card.
+           v18.6: no more hardcoded .45 - the slider in the settings panel
+           (gear button, bottom-right) sets --userscript-watched-opacity
+           0-100; it drives the card dim, duplicate content, outline alpha
+           and badge alpha together. Hover always reveals at .75 minimum,
+           so a card dimmed to 0 still shows on hover. */
+        .userscript-duplicate-watched > * { opacity:var(--userscript-watched-opacity)!important; transition:opacity .2s ease!important; }
+        .userscript-duplicate-watched:hover { opacity:1!important; outline-color:rgba(255,179,0,max(var(--userscript-watched-opacity),.75))!important; }
+        .userscript-duplicate-watched:hover > * { opacity:max(var(--userscript-watched-opacity),.75)!important; }
         .userscript-duplicate-watched::before {
             content:'DUPLICATE · 100% WATCHED'; display:inline-block; position:relative;
             z-index:2; margin:4px; padding:4px 8px; border-radius:3px;
-            background:#ffb300; color:#111; font:700 11px/1.2 Roboto,Arial,sans-serif;
+            background:rgba(255,179,0,var(--userscript-watched-opacity))!important; color:#111; font:700 11px/1.2 Roboto,Arial,sans-serif;
         }
+        .userscript-duplicate-watched:hover::before { background:rgba(255,179,0,max(var(--userscript-watched-opacity),.75))!important; }
         .userscript-duplicate-current {
             outline-color:#00e5ff!important; box-shadow:0 0 0 6px rgba(0,229,255,.3)!important;
         }
@@ -93,6 +118,24 @@
         }
         #yt-duplicate-nav button:hover { background:#606060; }
         #yt-duplicate-nav-status { min-width:92px; text-align:center; }
+        #yt-marker-settings-btn {
+            position:fixed; right:30px; bottom:146px; z-index:99999; width:40px; height:40px;
+            border:1px solid #555; border-radius:50%; background:rgba(20,20,20,.96); color:#fff;
+            cursor:pointer; font-size:18px; line-height:1; box-shadow:0 4px 12px rgba(0,0,0,.5);
+        }
+        #yt-marker-settings-btn:hover { background:#333; }
+        #yt-marker-settings {
+            position:fixed; right:30px; bottom:196px; z-index:99999; width:230px; display:none;
+            padding:12px; border:1px solid #555; border-radius:8px; background:rgba(20,20,20,.96);
+            color:#fff; box-shadow:0 4px 12px rgba(0,0,0,.5); font:400 13px Roboto,Arial,sans-serif;
+        }
+        .yt-marker-settings-title { display:flex; justify-content:space-between; align-items:center; font-weight:700; margin-bottom:10px; }
+        #yt-marker-settings-close { border:0; background:transparent; color:#aaa; cursor:pointer; font-size:14px; padding:2px 6px; }
+        #yt-marker-settings-close:hover { color:#fff; }
+        .yt-marker-settings-row { display:flex; justify-content:space-between; align-items:center; margin:8px 0; cursor:pointer; }
+        .yt-marker-settings-row input[type="checkbox"] { width:16px; height:16px; cursor:pointer; }
+        #yt-marker-opacity-slider { width:100%; cursor:pointer; accent-color:#ffb300; }
+        #yt-marker-opacity-value { color:#ffb300; font-weight:700; }
     `;
     const style = document.createElement('style');
     style.textContent = css;
@@ -315,7 +358,7 @@
         fullyWatched.forEach((card) => card.classList.add('userscript-watched-dimmed'));
 
         const duplicates = [];
-        if (isHistoryPage()) {
+        if (isHistoryPage() && dupCheckEnabled) {
             byVideoId.forEach((entries) => { if (entries.length > 1) duplicates.push(...entries); });
         }
         const duplicateSet = new Set(duplicates);
@@ -340,6 +383,12 @@
         scanTimer = setTimeout(() => runFilterOnce(), 350);
     }
 
+    function toggleSettingsPanel() {
+        const panel = document.getElementById('yt-marker-settings');
+        if (!panel) return;
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    }
+
     function createInterface() {
         if (!isSupportedPage() || !document.body) return;
         if (isHistoryPage() && !document.getElementById('yt-duplicate-nav')) {
@@ -362,12 +411,43 @@
             nav.append(previous, status, next);
             document.body.appendChild(nav);
         }
+        if (!document.getElementById('yt-marker-settings-btn')) {
+            const btn = document.createElement('button');
+            btn.id = 'yt-marker-settings-btn';
+            btn.type = 'button';
+            btn.textContent = '\u2699\uFE0F';
+            btn.title = 'Watched marker settings';
+            btn.addEventListener('click', toggleSettingsPanel);
+            document.body.appendChild(btn);
+        }
+        if (!document.getElementById('yt-marker-settings')) {
+            const panel = document.createElement('div');
+            panel.id = 'yt-marker-settings';
+            panel.innerHTML = `<div class="yt-marker-settings-title">marker settings<button type="button" id="yt-marker-settings-close" title="Close">\u2715</button></div><label class="yt-marker-settings-row"><span>duplicate check</span><input type="checkbox" id="yt-marker-dup-toggle"${dupCheckEnabled ? ' checked' : ''}></label><div class="yt-marker-settings-row"><span>watched opacity</span><span id="yt-marker-opacity-value">${watchedOpacityPct}%</span></div><input type="range" id="yt-marker-opacity-slider" min="0" max="100" step="1" value="${watchedOpacityPct}">`;
+            document.body.appendChild(panel);
+            panel.querySelector('#yt-marker-settings-close').addEventListener('click', toggleSettingsPanel);
+            panel.querySelector('#yt-marker-dup-toggle').addEventListener('change', (e) => {
+                dupCheckEnabled = e.target.checked;
+                GM_setValue(SETTINGS_KEY_DUP, dupCheckEnabled);
+                scheduleScan();
+            });
+            const slider = panel.querySelector('#yt-marker-opacity-slider');
+            slider.addEventListener('input', () => {
+                watchedOpacityPct = Number(slider.value);
+                applyWatchedOpacity();
+            });
+            slider.addEventListener('change', () => {
+                GM_setValue(SETTINGS_KEY_OPACITY, watchedOpacityPct);
+            });
+        }
         scheduleScan();
     }
 
     function removeInterface() {
         clearTimeout(scanTimer);
         document.getElementById('yt-duplicate-nav')?.remove();
+        document.getElementById('yt-marker-settings-btn')?.remove();
+        document.getElementById('yt-marker-settings')?.remove();
         document.querySelectorAll('.userscript-watched-dimmed,.userscript-duplicate-watched,.userscript-duplicate-current')
             .forEach((card) => card.classList.remove(
                 'userscript-watched-dimmed', 'userscript-duplicate-watched', 'userscript-duplicate-current'
