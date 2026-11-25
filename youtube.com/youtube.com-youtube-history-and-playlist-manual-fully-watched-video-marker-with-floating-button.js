@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube History/Playlist: Manual Watched Video Marker
 // @namespace    http://tampermonkey.net/
-// @version      18.7
+// @version      18.8
 // @downloadURL  https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @updateURL    https://raw.githubusercontent.com/FahadBinHussain/automata/refs/heads/main/youtube.com/youtube.com-youtube-history-and-playlist-manual-fully-watched-video-marker-with-floating-button.js
 // @description  Mark fully watched videos and highlight duplicate 100%-watched entries anywhere on YouTube. Gear button opens settings: duplicate check on/off, watched opacity slider (0-100).
@@ -95,7 +95,11 @@
            Trusted Types, so that assignment throws and the panel never
            appeared (gear button worked, panel didn't). The panel is now
            built with createElement/textContent like the nav widget.
-           Never use innerHTML in a YouTube userscript. */
+           Never use innerHTML in a YouTube userscript.
+           v18.8: the gear button needed two clicks the first time -
+           the toggle read the INLINE display ('' at first; the panel
+           is hidden by the stylesheet rule, not inline). It now reads
+           the computed display, so one click opens it. */
         .userscript-duplicate-watched > * { opacity:var(--userscript-watched-opacity)!important; transition:opacity .2s ease!important; }
         .userscript-duplicate-watched:hover { opacity:1!important; outline-color:rgba(255,179,0,max(var(--userscript-watched-opacity),.75))!important; }
         .userscript-duplicate-watched:hover > * { opacity:max(var(--userscript-watched-opacity),.75)!important; }
@@ -391,7 +395,7 @@
     function toggleSettingsPanel() {
         const panel = document.getElementById('yt-marker-settings');
         if (!panel) return;
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        panel.style.display = getComputedStyle(panel).display === 'none' ? 'block' : 'none';
     }
 
     function createInterface() {
